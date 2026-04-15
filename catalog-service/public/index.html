@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>catalog — jacob.st services</title>
+<style>
+  :root {
+    --bg: #0e0f14;
+    --bg-2: #151721;
+    --border: #272a37;
+    --text: #e4e5ea;
+    --muted: #8a8d9a;
+    --faint: #5c5f6e;
+    --accent: #7f6df2;
+    --ok: #7fcf8b;
+    --warn: #f0bd7c;
+    --err: #ee7a7a;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+  header { padding: 24px 32px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: baseline; gap: 24px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; letter-spacing: -0.02em; }
+  header .meta { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+  main { padding: 24px 32px; max-width: 1400px; margin: 0 auto; }
+  .controls { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+  input[type=search], select { background: var(--bg-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; font-size: 13px; font-family: inherit; }
+  input[type=search] { flex: 1; min-width: 220px; }
+  label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; cursor: pointer; }
+  input[type=checkbox] { accent-color: var(--accent); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+  .card { background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; transition: border-color 0.15s; }
+  .card:hover { border-color: var(--accent); }
+  .card .top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+  .card h3 { margin: 0; font-size: 15px; font-weight: 600; }
+  .card .category { color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .card .desc { color: var(--muted); font-size: 13px; margin: 6px 0 10px; }
+  .urls { margin-top: 10px; }
+  .urls a { display: block; color: var(--accent); font-family: var(--mono); font-size: 12px; margin-bottom: 2px; text-decoration: none; }
+  .urls a:hover { text-decoration: underline; }
+  .meta-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; font-size: 11px; color: var(--muted); font-family: var(--mono); }
+  .pill { background: var(--bg); border: 1px solid var(--border); padding: 2px 8px; border-radius: 10px; }
+  .status-running { color: var(--ok); }
+  .status-partial { color: var(--warn); }
+  .status-stopped { color: var(--err); }
+  .status-unknown { color: var(--faint); }
+  .tags { margin-top: 6px; }
+  .tag { display: inline-block; background: var(--bg); border: 1px solid var(--border); color: var(--faint); padding: 1px 7px; border-radius: 10px; font-size: 11px; margin: 2px 4px 0 0; }
+  details { margin-top: 10px; font-size: 12px; color: var(--muted); }
+  summary { cursor: pointer; color: var(--faint); }
+  details pre { margin: 8px 0 0; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 8px; font-family: var(--mono); font-size: 11px; overflow-x: auto; color: var(--muted); }
+  .empty { color: var(--faint); padding: 40px; text-align: center; }
+  footer { padding: 24px 32px; color: var(--faint); font-size: 12px; font-family: var(--mono); }
+  .banner { background: rgba(238, 122, 122, 0.1); border: 1px solid var(--err); color: var(--err); padding: 10px 14px; border-radius: 6px; margin-bottom: 20px; font-family: var(--mono); font-size: 12px; }
+  /* Keys panel */
+  .panel { background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 20px; }
+  .panel h2 { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
+  .panel .row { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .panel .row:last-child { border-bottom: none; }
+  .panel .row .name { flex: 1; font-weight: 500; }
+  .panel .row .meta { color: var(--faint); font-size: 12px; font-family: var(--mono); }
+  .panel button { background: var(--accent); color: white; border: none; border-radius: 4px; padding: 6px 12px; cursor: pointer; font-size: 12px; font-family: inherit; }
+  .panel button.danger { background: transparent; border: 1px solid var(--err); color: var(--err); }
+  .panel button:hover { opacity: 0.85; }
+  .new-key-banner { background: rgba(127, 109, 242, 0.1); border: 1px solid var(--accent); color: var(--text); padding: 12px 14px; border-radius: 6px; margin-bottom: 12px; }
+  .new-key-banner code { background: var(--bg); padding: 4px 8px; border-radius: 4px; font-family: var(--mono); font-size: 12px; word-break: break-all; user-select: all; }
+  .new-key-banner .warn { color: var(--warn); font-size: 11px; margin-top: 6px; display: block; }
+  .toggle-link { background: none; border: none; color: var(--accent); cursor: pointer; font: inherit; padding: 0; margin-bottom: 12px; font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>catalog <span style="color: var(--faint); font-weight: 400;">— jacob.st services</span></h1>
+  <div class="meta" id="meta">loading…</div>
+</header>
+
+<main>
+  <div class="controls">
+    <input type="search" id="q" placeholder="filter by name, hostname, tag, description…" />
+    <select id="host"><option value="">all hosts</option></select>
+    <select id="category"><option value="">all categories</option></select>
+    <select id="status"><option value="">all statuses</option><option>running</option><option>partial</option><option>stopped</option><option>unknown</option></select>
+    <label><input type="checkbox" id="internal" /> show internal</label>
+  </div>
+
+  <button class="toggle-link" id="toggleKeys">⚙ manage api keys</button>
+  <div id="keysPanel" class="panel" style="display:none">
+    <h2>API keys</h2>
+    <div id="newKeyBanner"></div>
+    <div style="display:flex; gap:8px; margin-bottom:12px;">
+      <input type="text" id="newKeyName" placeholder="key name (e.g. everything-app)" style="flex:1; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:4px; padding:6px 10px; font-size:13px; font-family:inherit;" />
+      <button id="createKey">create</button>
+    </div>
+    <div id="keysList"></div>
+  </div>
+
+  <div id="banner"></div>
+  <div id="grid" class="grid"></div>
+  <div id="empty" class="empty" style="display:none">no services match</div>
+</main>
+
+<footer id="footer"></footer>
+
+<script>
+let state = { services: [] };
+
+function badge(status) {
+  return `<span class="pill status-${status}">${status}</span>`;
+}
+
+function card(s) {
+  const urls = s.hostnames.map(h => `<a href="https://${h}" target="_blank">https://${h}</a>`).join("");
+  const ports = s.ports.length ? s.ports.map(p => `:${p}`).join(" ") : "—";
+  const tags = s.tags.map(t => `<span class="tag">${t}</span>`).join("");
+  const secrets = s.infisical_secrets.length
+    ? `<details><summary>Infisical keys (${s.infisical_secrets.length})</summary><pre>${s.infisical_secrets.join("\n")}</pre></details>`
+    : "";
+  const containers = s.containers.length
+    ? `<details><summary>containers (${s.containers.length})</summary><pre>${s.containers.join("\n")}${s.missingContainers.length ? "\n\nMISSING:\n" + s.missingContainers.join("\n") : ""}</pre></details>`
+    : "";
+  const access = s.access.length && s.access[0].policies.length
+    ? `<details><summary>auth (${s.access[0].policies.length} ${s.access[0].policies.length === 1 ? "policy" : "policies"})</summary><pre>${s.access.map(a => a.policies.map(p => `${p.decision}: ${p.identities.join(", ")}`).join("\n")).join("\n")}</pre></details>`
+    : "";
+
+  return `
+    <div class="card">
+      <div class="top">
+        <h3>${s.name}</h3>
+        ${badge(s.status)}
+      </div>
+      ${s.category ? `<div class="category">${s.category}</div>` : ""}
+      ${s.description ? `<div class="desc">${s.description}</div>` : ""}
+      <div class="urls">${urls || "<span style='color:var(--faint)'>no public URL</span>"}</div>
+      <div class="meta-row">
+        <span class="pill">${s.host}</span>
+        <span class="pill">${ports}</span>
+        ${s.internal ? '<span class="pill" style="color:var(--faint)">internal</span>' : ""}
+      </div>
+      ${tags ? `<div class="tags">${tags}</div>` : ""}
+      ${containers}
+      ${access}
+      ${secrets}
+      ${s.docs_url ? `<div style="margin-top: 10px;"><a href="${s.docs_url}" target="_blank" style="color:var(--faint); font-size: 12px;">docs ↗</a></div>` : ""}
+    </div>
+  `;
+}
+
+function populateFilters() {
+  const hosts = [...new Set(state.services.map(s => s.host))].sort();
+  const categories = [...new Set(state.services.map(s => s.category).filter(Boolean))].sort();
+  document.getElementById("host").innerHTML = '<option value="">all hosts</option>' + hosts.map(h => `<option>${h}</option>`).join("");
+  document.getElementById("category").innerHTML = '<option value="">all categories</option>' + categories.map(c => `<option>${c}</option>`).join("");
+}
+
+function render() {
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const host = document.getElementById("host").value;
+  const category = document.getElementById("category").value;
+  const status = document.getElementById("status").value;
+  const internal = document.getElementById("internal").checked;
+
+  let list = state.services;
+  if (!internal) list = list.filter(s => !s.internal);
+  if (host) list = list.filter(s => s.host === host);
+  if (category) list = list.filter(s => s.category === category);
+  if (status) list = list.filter(s => s.status === status);
+  if (q) list = list.filter(s =>
+    s.name.toLowerCase().includes(q) ||
+    (s.description || "").toLowerCase().includes(q) ||
+    s.hostnames.some(h => h.toLowerCase().includes(q)) ||
+    s.tags.some(t => t.toLowerCase().includes(q)) ||
+    s.containers.some(c => c.toLowerCase().includes(q))
+  );
+
+  const grid = document.getElementById("grid");
+  const empty = document.getElementById("empty");
+  if (list.length === 0) {
+    grid.innerHTML = "";
+    empty.style.display = "block";
+  } else {
+    empty.style.display = "none";
+    grid.innerHTML = list.map(card).join("");
+  }
+  document.getElementById("footer").textContent = `${list.length} of ${state.services.length} services`;
+}
+
+async function load() {
+  const r = await fetch("/api/services?internal=true");
+  const d = await r.json();
+  state.services = d.services;
+  document.getElementById("meta").textContent = `built ${new Date(d.builtAt).toLocaleTimeString()} • ${d.count} services`;
+  if (d.error) {
+    document.getElementById("banner").innerHTML = `<div class="banner">⚠ partial data: ${d.error}</div>`;
+  } else {
+    document.getElementById("banner").innerHTML = "";
+  }
+  populateFilters();
+  render();
+}
+
+["q", "host", "category", "status", "internal"].forEach(id =>
+  document.getElementById(id).addEventListener("input", render),
+);
+
+// Keys panel
+async function loadKeys() {
+  const r = await fetch("/api/keys");
+  const { keys } = await r.json();
+  const list = document.getElementById("keysList");
+  if (keys.length === 0) {
+    list.innerHTML = '<div style="color:var(--faint); font-size:13px;">no keys yet</div>';
+    return;
+  }
+  list.innerHTML = keys.map(k => `
+    <div class="row">
+      <span class="name">${k.name}</span>
+      <span class="meta">${k.id} · created ${new Date(k.createdAt).toLocaleString()}${k.lastUsed ? ' · last used ' + new Date(k.lastUsed).toLocaleString() : ' · never used'}</span>
+      <button class="danger" data-revoke="${k.id}">revoke</button>
+    </div>
+  `).join("");
+  list.querySelectorAll("button[data-revoke]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Revoke this key? Anything using it will break immediately.")) return;
+      await fetch("/api/keys/" + btn.dataset.revoke, { method: "DELETE" });
+      loadKeys();
+    });
+  });
+}
+
+document.getElementById("toggleKeys").addEventListener("click", () => {
+  const panel = document.getElementById("keysPanel");
+  if (panel.style.display === "none") {
+    panel.style.display = "";
+    loadKeys();
+  } else {
+    panel.style.display = "none";
+  }
+});
+
+document.getElementById("createKey").addEventListener("click", async () => {
+  const name = document.getElementById("newKeyName").value.trim();
+  if (!name) { alert("Give the key a name first."); return; }
+  const r = await fetch("/api/keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!r.ok) { alert("Failed to create key"); return; }
+  const result = await r.json();
+  document.getElementById("newKeyBanner").innerHTML = `
+    <div class="new-key-banner">
+      <strong>${result.name}</strong> created. Copy this key now — it will not be shown again:<br/>
+      <code>${result.key}</code>
+      <span class="warn">⚠ ${result.note}</span>
+    </div>
+  `;
+  document.getElementById("newKeyName").value = "";
+  loadKeys();
+});
+
+load();
+setInterval(load, 60_000);
+</script>
+</body>
+</html>

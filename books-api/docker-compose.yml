@@ -1,0 +1,15 @@
+services:
+  books-api:
+    build:
+      context: .
+    container_name: books-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3700:3000"
+    env_file:
+      - .env
+    volumes:
+      - books-api-keys:/data
+
+volumes:
+  books-api-keys:
