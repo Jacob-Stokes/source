@@ -1,6 +1,9 @@
-// Reads per-service catalog.yml files from /services/<name>/catalog.yml
-// These provide human-curated metadata (description, secret names, docs links)
-// that aren't derivable from docker/cloudflared/access.
+// Reads per-service catalog.yml files from <SERVICES_ROOT>/<name>/catalog.yml
+// SERVICES_ROOT can be a single path OR a colon-separated list of paths
+// (Unix PATH style) to support multi-host setups — e.g.
+//   SERVICES_ROOT=/services-resolution:/services-adventure
+// Each scanned root contributes its services. The catalog.yml's `host:`
+// field declares which physical host owns each service.
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
@@ -20,12 +23,12 @@ export interface ServiceCatalogFile {
   internal?: boolean;            // hide from default listing
 }
 
-export function readCatalogHints(): ServiceCatalogFile[] {
-  if (!fs.existsSync(SERVICES_ROOT)) return [];
+function scanRoot(root: string): ServiceCatalogFile[] {
+  if (!fs.existsSync(root)) return [];
   const hints: ServiceCatalogFile[] = [];
-  for (const name of fs.readdirSync(SERVICES_ROOT)) {
+  for (const name of fs.readdirSync(root)) {
     if (name.startsWith(".")) continue; // skip .git, .DS_Store, etc.
-    const dir = path.join(SERVICES_ROOT, name);
+    const dir = path.join(root, name);
     if (!fs.statSync(dir).isDirectory()) continue;
     // Must have a compose file to count as a service.
     const hasCompose = ["compose.yml", "compose.yaml", "docker-compose.yml", "docker-compose.yaml"]
@@ -45,4 +48,19 @@ export function readCatalogHints(): ServiceCatalogFile[] {
     }
   }
   return hints;
+}
+
+export function readCatalogHints(): ServiceCatalogFile[] {
+  const roots = SERVICES_ROOT.split(":").filter(Boolean);
+  const all: ServiceCatalogFile[] = [];
+  const seen = new Set<string>();
+  for (const root of roots) {
+    for (const hint of scanRoot(root)) {
+      // First occurrence wins — earlier roots take precedence for name collisions.
+      if (seen.has(hint.service)) continue;
+      seen.add(hint.service);
+      all.push(hint);
+    }
+  }
+  return all;
 }
