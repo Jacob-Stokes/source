@@ -51,7 +51,7 @@ async function rebuild(): Promise<CatalogCache> {
   } catch (e: any) {
     return (cache = {
       services: cache?.services ?? [],
-      infra: cache?.infra ?? { cloudflared_routes: [], systems: [], access_apps: [] },
+      infra: cache?.infra ?? { cloudflared_routes: [], hosts: [], access_apps: [] },
       builtAt: Date.now(),
       error: e.message,
     });
