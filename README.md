@@ -6,7 +6,7 @@ Monorepo for small services I own the source of. Each subdirectory with a
 
 | Service | Image | Description |
 |---|---|---|
-| `books-api/` | `ghcr.io/jacob-stokes/books-api` | Read-only Hono API for Calibre-Web Automated libraries. |
+| `calibreweb-api/` | `ghcr.io/jacob-stokes/calibreweb-api` | Read-only Hono API for Calibre-Web Automated libraries. |
 | `catalog-service/` | `ghcr.io/jacob-stokes/catalog-service` | Service inventory + REST API for jacob.st (joins Beszel + cloudflared + Cloudflare Access + per-service catalog.yml hints). |
 
 ## Adding a new service
