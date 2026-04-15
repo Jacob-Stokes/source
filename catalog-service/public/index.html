@@ -116,7 +116,6 @@ function card(s) {
   const secrets = s.infisical_secrets.length
     ? `<details><summary>Infisical keys (${s.infisical_secrets.length})</summary><pre>${s.infisical_secrets.join("\n")}</pre></details>`
     : "";
-  const formatBytes = kb => kb == null ? "—" : kb < 1024 ? kb.toFixed(0) + " KB" : (kb / 1024).toFixed(1) + " MB";
   const containers = (s.containerDetails && s.containerDetails.length)
     ? `<details><summary>containers (${s.containerDetails.filter(c=>c.running).length}/${s.containerDetails.length})</summary>` +
       s.containerDetails.map(c => {
@@ -128,7 +127,6 @@ function card(s) {
         if (c.dependsOn && c.dependsOn.length) lines.push(`<div>depends on: ${c.dependsOn.join(", ")}</div>`);
         if (c.networkMode) lines.push(`<div>network: ${c.networkMode}</div>`);
         if (c.hasHealthcheck) lines.push(`<div>✓ healthcheck</div>`);
-        if (c.running) lines.push(`<div style="color:var(--muted)">CPU ${(c.cpu||0).toFixed(2)}% · MEM ${(c.memMB||0).toFixed(0)} MB · ↓${formatBytes(c.netRxKB)} ↑${formatBytes(c.netTxKB)}</div>`);
         return `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:11px;font-family:var(--mono)">${lines.join("")}</div>`;
       }).join("") +
       `</details>`

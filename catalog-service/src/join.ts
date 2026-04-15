@@ -17,11 +17,6 @@ export interface ContainerDetail {
   dependsOn?: string[];
   restart?: string;
   networkMode?: string;
-  // Runtime (Beszel) — undefined if not currently running
-  cpu?: number;
-  memMB?: number;
-  netRxKB?: number;
-  netTxKB?: number;
   running: boolean;
 }
 
@@ -61,9 +56,6 @@ export interface HostInfo {
   status: string;
   agentVersion?: string;
   uptimeSeconds?: number;
-  cpuPct?: number;
-  memPct?: number;
-  diskPct?: number;
   containerCount?: number;
 }
 
@@ -143,10 +135,6 @@ export function buildCatalog(
         dependsOn: c?.dependsOn,
         restart: c?.restart,
         networkMode: c?.networkMode,
-        cpu: live?.cpu,
-        memMB: live?.memMB,
-        netRxKB: live?.netRxKB,
-        netTxKB: live?.netTxKB,
         running: !!live,
       };
     });
@@ -209,9 +197,6 @@ export function buildCatalog(
       status: s.status,
       agentVersion: s.agentVersion,
       uptimeSeconds: s.uptimeSeconds,
-      cpuPct: s.cpuPct,
-      memPct: s.memPct,
-      diskPct: s.diskPct,
       containerCount: s.containerCount,
     })),
     access_apps: access.map((a) => ({
