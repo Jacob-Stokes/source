@@ -1,19 +1,39 @@
-// Joins data from Beszel + cloudflared + CF Access + catalog.yml hints into
-// a unified service record. One record per compose-project dir under /services.
+// Joins data from Beszel + cloudflared + CF Access + catalog.yml hints +
+// compose-file static metadata into a unified service record.
 
-import { BeszelState, BeszelContainer } from "./sources/beszel.js";
+import { BeszelState, BeszelContainer, BeszelSystem } from "./sources/beszel.js";
 import { TunnelRoute } from "./sources/tunnel.js";
 import { AccessAppSummary, matchAccess } from "./sources/access.js";
 import { ServiceCatalogFile } from "./sources/catalogs.js";
+import { readComposeForService, ContainerCompose } from "./sources/compose.js";
+
+export interface ContainerDetail {
+  name: string;
+  image?: string;
+  ports?: string[];
+  volumes?: string[];
+  envFile?: string;
+  hasHealthcheck?: boolean;
+  dependsOn?: string[];
+  restart?: string;
+  networkMode?: string;
+  // Runtime (Beszel) — undefined if not currently running
+  cpu?: number;
+  memMB?: number;
+  netRxKB?: number;
+  netTxKB?: number;
+  running: boolean;
+}
 
 export interface ServiceRecord {
   name: string;
   category?: string;
   description?: string;
   hostnames: string[];
-  containers: string[];      // names Beszel actually sees
-  missingContainers: string[]; // containers the hint mentioned but Beszel doesn't see
-  host: string;              // which physical host
+  containers: string[];        // names Beszel actually sees (legacy / shorthand)
+  missingContainers: string[];
+  containerDetails: ContainerDetail[];
+  host: string;
   status: "running" | "partial" | "stopped" | "unknown";
   ports: number[];
   access: Array<{
@@ -35,9 +55,21 @@ export interface ServiceRecord {
   updated_at: string;
 }
 
+export interface HostInfo {
+  name: string;
+  ip: string;
+  status: string;
+  agentVersion?: string;
+  uptimeSeconds?: number;
+  cpuPct?: number;
+  memPct?: number;
+  diskPct?: number;
+  containerCount?: number;
+}
+
 export interface InfrastructureRecord {
   cloudflared_routes: Array<{ hostname: string; service: string; port: number | null }>;
-  systems: Array<{ name: string; host: string; status: string }>;
+  hosts: HostInfo[];
   access_apps: Array<{ name: string; domain: string; policies: string[] }>;
 }
 
@@ -49,27 +81,35 @@ export function buildCatalog(
 ): { services: ServiceRecord[]; infra: InfrastructureRecord } {
   const services: ServiceRecord[] = [];
 
+  // Quick lookup of running containers by name
+  const runningByName = new Map<string, BeszelContainer>(
+    beszel.containers.map((c) => [c.name, c]),
+  );
+
   for (const hint of hints) {
     const serviceName = hint.service;
+    const absDir = hint._absDir;
 
-    // Match hostnames: use hint if provided, else infer by matching tunnel routes
-    // whose port maps to any container this service owns. Since we can't directly
-    // tie containers to ports without docker socket, we fall back to name matching.
+    // Static container info from compose.yml
+    const composeContainers: ContainerCompose[] = absDir ? readComposeForService(absDir) : [];
+
+    // Infer hostnames if not declared
     const hostnames = hint.hostnames ?? inferHostnames(serviceName, tunnel);
 
-    // Match containers: use hint if provided, else guess by prefix matching.
-    const expectedContainers = hint.containers ?? inferContainers(serviceName, beszel.containers);
-    const runningContainers = beszel.containers
-      .filter((c) => expectedContainers.includes(c.name))
-      .map((c) => c.name);
-    const missingContainers = expectedContainers.filter(
-      (n) => !runningContainers.includes(n),
-    );
+    // Expected containers: hint > compose > prefix-match in Beszel
+    const expectedContainers =
+      hint.containers ??
+      (composeContainers.length > 0
+        ? composeContainers.map((c) => c.name)
+        : inferContainers(serviceName, beszel.containers));
 
-    // Determine host — prefer hint, else whichever host is running the containers.
-    const hostFromContainers = beszel.containers.find((c) =>
-      expectedContainers.includes(c.name),
-    )?.systemName;
+    const runningContainers = expectedContainers.filter((n) => runningByName.has(n));
+    const missingContainers = expectedContainers.filter((n) => !runningByName.has(n));
+
+    // Determine host
+    const hostFromContainers = expectedContainers
+      .map((n) => runningByName.get(n)?.systemName)
+      .find(Boolean);
     const host = hint.host ?? hostFromContainers ?? "resolution";
 
     // Status
@@ -84,7 +124,34 @@ export function buildCatalog(
       status = "stopped";
     }
 
-    // Ports derived from tunnel routes
+    // Build per-container detail by merging compose + runtime
+    const composeByName = new Map(composeContainers.map((c) => [c.name, c]));
+    const allContainerNames = Array.from(new Set([
+      ...expectedContainers,
+      ...composeContainers.map((c) => c.name),
+    ]));
+    const containerDetails: ContainerDetail[] = allContainerNames.map((name) => {
+      const c = composeByName.get(name);
+      const live = runningByName.get(name);
+      return {
+        name,
+        image: c?.image,
+        ports: c?.ports,
+        volumes: c?.volumes,
+        envFile: c?.envFile,
+        hasHealthcheck: c?.hasHealthcheck,
+        dependsOn: c?.dependsOn,
+        restart: c?.restart,
+        networkMode: c?.networkMode,
+        cpu: live?.cpu,
+        memMB: live?.memMB,
+        netRxKB: live?.netRxKB,
+        netTxKB: live?.netTxKB,
+        running: !!live,
+      };
+    });
+
+    // Ports from tunnel routes (the only ports exposed publicly)
     const ports = hostnames
       .map((h) => tunnel.find((t) => t.hostname === h)?.port)
       .filter((p): p is number => typeof p === "number");
@@ -106,6 +173,7 @@ export function buildCatalog(
       hostnames,
       containers: runningContainers,
       missingContainers,
+      containerDetails,
       host,
       status,
       ports,
@@ -135,7 +203,17 @@ export function buildCatalog(
       service: t.service,
       port: t.port,
     })),
-    systems: beszel.systems.map((s) => ({ name: s.name, host: s.host, status: s.status })),
+    hosts: beszel.systems.map((s: BeszelSystem): HostInfo => ({
+      name: s.name,
+      ip: s.host,
+      status: s.status,
+      agentVersion: s.agentVersion,
+      uptimeSeconds: s.uptimeSeconds,
+      cpuPct: s.cpuPct,
+      memPct: s.memPct,
+      diskPct: s.diskPct,
+      containerCount: s.containerCount,
+    })),
     access_apps: access.map((a) => ({
       name: a.name,
       domain: a.domain,
@@ -147,18 +225,12 @@ export function buildCatalog(
 }
 
 function inferHostnames(service: string, tunnel: TunnelRoute[]): string[] {
-  // Match any tunnel hostname whose leading label matches the service name
-  // (e.g. service=grimmory → books.jacob.st wouldn't match, but service=obsidian → obsidian.jacob.st would).
   return tunnel
-    .filter((t) => {
-      const label = t.hostname.split(".")[0];
-      return label === service;
-    })
+    .filter((t) => t.hostname.split(".")[0] === service)
     .map((t) => t.hostname);
 }
 
 function inferContainers(service: string, containers: BeszelContainer[]): string[] {
-  // Match containers named exactly the service or service-*  (e.g. grimmory, grimmory-db)
   return containers
     .filter((c) => c.name === service || c.name.startsWith(`${service}-`))
     .map((c) => c.name);

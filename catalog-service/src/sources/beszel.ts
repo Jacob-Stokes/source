@@ -41,25 +41,39 @@ async function pb(path: string): Promise<any> {
 export interface BeszelSystem {
   id: string;
   name: string;
-  host: string;
+  host: string;       // IP (tailscale or LAN)
   status: string;
+  agentVersion?: string;
+  uptimeSeconds?: number;
+  cpuPct?: number;
+  memPct?: number;
+  diskPct?: number;
+  containerCount?: number;
 }
 
 export interface BeszelContainer {
   name: string;
   systemId: string;
   systemName: string;
-  cpu: number;
+  cpu: number;     // % of one core
   memMB: number;
+  netRxKB?: number;
+  netTxKB?: number;
 }
 
 export async function fetchSystems(): Promise<BeszelSystem[]> {
   const res = await pb(`/api/collections/systems/records?perPage=200`);
-  return res.items.map((x: any) => ({
+  return res.items.map((x: any): BeszelSystem => ({
     id: x.id,
     name: x.name,
     host: x.host,
     status: x.status,
+    agentVersion: x.info?.v,
+    uptimeSeconds: x.info?.u,
+    cpuPct: x.info?.cpu,
+    memPct: x.info?.mp,
+    diskPct: x.info?.dp,
+    containerCount: x.info?.ct,
   }));
 }
 
@@ -83,6 +97,8 @@ export async function fetchContainers(
         systemName: sys.name,
         cpu: c.c ?? 0,
         memMB: c.m ?? 0,
+        netRxKB: Array.isArray(c.b) ? c.b[0] : undefined,
+        netTxKB: Array.isArray(c.b) ? c.b[1] : undefined,
       });
     }
   }

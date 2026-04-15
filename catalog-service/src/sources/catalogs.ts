@@ -21,6 +21,8 @@ export interface ServiceCatalogFile {
   containers?: string[];         // hint for which container names belong to this service
   host?: string;                 // override if the service runs on a specific host (default: resolution)
   internal?: boolean;            // hide from default listing
+  // populated post-read by the scanner — absolute compose-dir path
+  _absDir?: string;
 }
 
 function scanRoot(root: string): ServiceCatalogFile[] {
@@ -36,15 +38,15 @@ function scanRoot(root: string): ServiceCatalogFile[] {
     if (!hasCompose) continue;
     const file = path.join(dir, "catalog.yml");
     if (!fs.existsSync(file)) {
-      hints.push({ service: name });
+      hints.push({ service: name, _absDir: dir });
       continue;
     }
     try {
       const parsed = YAML.parse(fs.readFileSync(file, "utf-8")) || {};
-      hints.push({ service: name, ...parsed });
+      hints.push({ service: name, ...parsed, _absDir: dir });
     } catch (e) {
       console.error(`catalog.yml parse failed for ${name}:`, e);
-      hints.push({ service: name });
+      hints.push({ service: name, _absDir: dir });
     }
   }
   return hints;
