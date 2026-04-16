@@ -125,7 +125,8 @@ function card(s) {
         if (c.ports && c.ports.length) lines.push(`<div>ports: ${c.ports.map(p=>`<code>${p}</code>`).join(" ")}</div>`);
         if (c.volumes && c.volumes.length) lines.push(`<div>volumes: ${c.volumes.length}</div>`);
         if (c.dependsOn && c.dependsOn.length) lines.push(`<div>depends on: ${c.dependsOn.join(", ")}</div>`);
-        if (c.networkMode) lines.push(`<div>network: ${c.networkMode}</div>`);
+        if (c.networks && c.networks.length) lines.push(`<div>networks: ${c.networks.join(", ")}</div>`);
+        if (c.networkMode) lines.push(`<div>network_mode: ${c.networkMode}</div>`);
         if (c.hasHealthcheck) lines.push(`<div>✓ healthcheck</div>`);
         return `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:11px;font-family:var(--mono)">${lines.join("")}</div>`;
       }).join("") +
@@ -151,6 +152,7 @@ function card(s) {
         <span class="pill">${s.host}</span>
         <span class="pill">${ports}</span>
         ${s.internal ? '<span class="pill" style="color:var(--faint)">internal</span>' : ""}
+        ${(s.networks && s.networks.length) ? s.networks.map(n => `<span class="pill" style="color:var(--accent)">${n}</span>`).join("") : ""}
       </div>
       ${tags ? `<div class="tags">${tags}</div>` : ""}
       ${containers}

@@ -5,7 +5,7 @@ import { BeszelState, BeszelContainer, BeszelSystem } from "./sources/beszel.js"
 import { TunnelRoute } from "./sources/tunnel.js";
 import { AccessAppSummary, matchAccess } from "./sources/access.js";
 import { ServiceCatalogFile } from "./sources/catalogs.js";
-import { readComposeForService, ContainerCompose } from "./sources/compose.js";
+import { readComposeForService, ContainerCompose, ComposeNetwork } from "./sources/compose.js";
 
 const ICONS_BASE = process.env.ICONS_BASE_URL || "https://icons.jacob.st";
 
@@ -19,6 +19,7 @@ export interface ContainerDetail {
   dependsOn?: string[];
   restart?: string;
   networkMode?: string;
+  networks?: string[];
   running: boolean;
 }
 
@@ -49,6 +50,7 @@ export interface ServiceRecord {
     beszel?: string;
     obsidian?: string;
   };
+  networks: string[];             // deduplicated list of docker networks this service connects to
   icon_url?: string;             // selfh.st/icons URL — undefined if explicitly suppressed
   updated_at: string;
 }
@@ -86,7 +88,8 @@ export function buildCatalog(
     const absDir = hint._absDir;
 
     // Static container info from compose.yml
-    const composeContainers: ContainerCompose[] = absDir ? readComposeForService(absDir) : [];
+    const composeProject = absDir ? readComposeForService(absDir) : { containers: [], networks: [] };
+    const composeContainers = composeProject.containers;
 
     // Infer hostnames if not declared
     const hostnames = hint.hostnames ?? inferHostnames(serviceName, tunnel);
@@ -138,6 +141,7 @@ export function buildCatalog(
         dependsOn: c?.dependsOn,
         restart: c?.restart,
         networkMode: c?.networkMode,
+        networks: c?.networks,
         running: !!live,
       };
     });
@@ -173,6 +177,12 @@ export function buildCatalog(
       docs_url: hint.docs_url,
       tags: hint.tags ?? [],
       internal: hint.internal === true,
+      networks: Array.from(new Set([
+        // Per-container networks
+        ...containerDetails.flatMap((c) => c.networks ?? []),
+        // Top-level compose networks (include real names for external ones)
+        ...composeProject.networks.map((n) => n.realName ?? n.name),
+      ])).filter((n) => n !== "default"),
       paths: {
         docker_services: `/root/docker-services/${serviceName}`,
       },

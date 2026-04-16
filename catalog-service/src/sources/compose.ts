@@ -16,6 +16,19 @@ export interface ContainerCompose {
   dependsOn: string[];
   restart?: string;
   networkMode?: string;
+  networks: string[];  // network names this container is connected to
+}
+
+// Top-level network info for the whole compose project.
+export interface ComposeNetwork {
+  name: string;        // key in the top-level `networks:` block
+  external: boolean;
+  realName?: string;   // `name:` field if specified (e.g. beszel_default)
+}
+
+export interface ComposeProject {
+  containers: ContainerCompose[];
+  networks: ComposeNetwork[];
 }
 
 const COMPOSE_FILES = ["compose.yml", "compose.yaml", "docker-compose.yml", "docker-compose.yaml"];
@@ -45,22 +58,40 @@ function dependsOnArray(v: unknown): string[] {
   return [];
 }
 
-export function readComposeForService(serviceDir: string): ContainerCompose[] {
+function networksArray(v: unknown): string[] {
+  if (!v) return [];
+  if (Array.isArray(v)) return v.filter((x) => typeof x === "string");
+  if (typeof v === "object") return Object.keys(v as Record<string, unknown>);
+  return [];
+}
+
+function parseTopLevelNetworks(doc: any): ComposeNetwork[] {
+  const nets = doc?.networks;
+  if (!nets || typeof nets !== "object") return [];
+  return Object.entries(nets).map(([key, val]: [string, any]) => ({
+    name: key,
+    external: !!(val?.external),
+    realName: typeof val?.name === "string" ? val.name : undefined,
+  }));
+}
+
+export function readComposeForService(serviceDir: string): ComposeProject {
   const file = findComposeFile(serviceDir);
-  if (!file) return [];
+  if (!file) return { containers: [], networks: [] };
   let doc: any;
   try {
     doc = YAML.parse(fs.readFileSync(file, "utf-8"));
   } catch {
-    return [];
+    return { containers: [], networks: [] };
   }
   const services = doc?.services ?? {};
-  const out: ContainerCompose[] = [];
+  const topNetworks = parseTopLevelNetworks(doc);
+  const containers: ContainerCompose[] = [];
   for (const [key, raw] of Object.entries(services)) {
     const svc = raw as any;
     const containerName: string = svc?.container_name ?? key;
     const envFile = Array.isArray(svc?.env_file) ? svc.env_file[0] : svc?.env_file;
-    out.push({
+    containers.push({
       name: containerName,
       service: key,
       image: typeof svc?.image === "string" ? svc.image : undefined,
@@ -71,7 +102,8 @@ export function readComposeForService(serviceDir: string): ContainerCompose[] {
       dependsOn: dependsOnArray(svc?.depends_on),
       restart: typeof svc?.restart === "string" ? svc.restart : undefined,
       networkMode: typeof svc?.network_mode === "string" ? svc.network_mode : undefined,
+      networks: networksArray(svc?.networks),
     });
   }
-  return out;
+  return { containers, networks: topNetworks };
 }
