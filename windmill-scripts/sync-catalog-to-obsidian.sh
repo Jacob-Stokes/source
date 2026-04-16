@@ -40,7 +40,7 @@ build_frontmatter() {
       elif (v|type) == "number" or (v|type) == "boolean" then v|tostring
       else v|tojson end;
     def yamlList(arr):
-      if (arr|length) == 0 then "[]"
+      if (arr|length) == 0 then " []"
       else "\n" + (arr | map("  - " + (yamlVal(.))) | join("\n")) end;
 
     "---",
