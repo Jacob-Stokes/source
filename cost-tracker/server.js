@@ -171,23 +171,23 @@ function initSettings() {
 initSettings();
 
 app.get('/', requireBasicAuth, (req, res) => res.send(renderDashboard()));
-app.get('/api/stats', requireBasicAuth, (req, res) => {
+app.get('/api/stats', requireApiKeyOrBasicAuth, (req, res) => {
   res.json(getStats({ since: req.query.since, until: req.query.until, agent: req.query.agent, model: req.query.model }));
 });
-app.get('/api/stats/timeseries', requireBasicAuth, (req, res) => {
+app.get('/api/stats/timeseries', requireApiKeyOrBasicAuth, (req, res) => {
   res.json(getTimeseries(parseInt(req.query.days) || 30));
 });
-app.get('/api/runs', requireBasicAuth, (req, res) => {
+app.get('/api/runs', requireApiKeyOrBasicAuth, (req, res) => {
   res.json(getRuns({
     agent: req.query.agent, model: req.query.model,
     since: req.query.since, until: req.query.until,
     limit: parseInt(req.query.limit) || 100, offset: parseInt(req.query.offset) || 0,
   }));
 });
-app.get('/api/filters', requireBasicAuth, (req, res) => {
+app.get('/api/filters', requireApiKeyOrBasicAuth, (req, res) => {
   res.json(getFilterOptions());
 });
-app.get('/api/settings', requireBasicAuth, (req, res) => {
+app.get('/api/settings', requireApiKeyOrBasicAuth, (req, res) => {
   const db = getDb();
   const rows = db.prepare('SELECT key, value FROM settings').all();
   res.json(Object.fromEntries(rows.map(r => [r.key, r.value])));
@@ -212,13 +212,13 @@ app.post('/api/settings/api-key/generate', requireBasicAuth, (req, res) => {
     res.status(500).json({ error: 'Failed to save API key: ' + e.message });
   }
 });
-app.get('/api/agent-stats/:agent', requireBasicAuth, (req, res) => {
+app.get('/api/agent-stats/:agent', requireApiKeyOrBasicAuth, (req, res) => {
   const limit = parseInt(req.query.limit) || 10;
   const offset = parseInt(req.query.offset) || 0;
   res.json(getAgentStats(req.params.agent, { limit, offset }));
 });
 
-app.get('/api/rates', requireBasicAuth, async (req, res) => {
+app.get('/api/rates', requireApiKeyOrBasicAuth, async (req, res) => {
   await fetchExchangeRates();
   res.json(exchangeRates);
 });
@@ -232,7 +232,7 @@ app.get('/api/claude-usage', requireApiKeyOrBasicAuth, async (req, res) => {
   else res.status(503).json({ error: 'Could not fetch Claude usage' });
 });
 
-app.get('/api/codex-usage', requireBasicAuth, async (req, res) => {
+app.get('/api/codex-usage', requireApiKeyOrBasicAuth, async (req, res) => {
   const usage = await fetchCodexUsage();
   if (usage) res.json(usage);
   else res.status(503).json({ error: 'Could not fetch Codex usage' });
