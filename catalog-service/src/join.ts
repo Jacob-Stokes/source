@@ -7,6 +7,8 @@ import { AccessAppSummary, matchAccess } from "./sources/access.js";
 import { ServiceCatalogFile } from "./sources/catalogs.js";
 import { readComposeForService, ContainerCompose } from "./sources/compose.js";
 
+const ICONS_BASE = process.env.ICONS_BASE_URL || "https://icons.jacob.st";
+
 export interface ContainerDetail {
   name: string;
   image?: string;
@@ -47,6 +49,7 @@ export interface ServiceRecord {
     beszel?: string;
     obsidian?: string;
   };
+  icon_url?: string;             // selfh.st/icons URL — undefined if explicitly suppressed
   updated_at: string;
 }
 
@@ -179,6 +182,9 @@ export function buildCatalog(
           `Homelab/Services/${serviceName}`,
         )}`,
       },
+      icon_url: hint.icon === false
+        ? undefined
+        : `${ICONS_BASE}/${typeof hint.icon === "string" ? hint.icon : serviceName}.svg`,
       updated_at: new Date().toISOString(),
     });
   }

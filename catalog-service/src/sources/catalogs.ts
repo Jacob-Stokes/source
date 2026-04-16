@@ -21,6 +21,10 @@ export interface ServiceCatalogFile {
   containers?: string[];         // hint for which container names belong to this service
   host?: string;                 // override if the service runs on a specific host (default: resolution)
   internal?: boolean;            // hide from default listing
+  // icon: defaults to service name (e.g. "grimmory" → icons.jacob.st/grimmory).
+  // Override with a string for non-standard names (e.g. "obsidian-landing" → icon: obsidian).
+  // Set to false to suppress (no icon_url in record).
+  icon?: string | false;
   // populated post-read by the scanner — absolute compose-dir path
   _absDir?: string;
 }
