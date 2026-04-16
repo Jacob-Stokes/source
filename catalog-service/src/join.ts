@@ -177,12 +177,20 @@ export function buildCatalog(
       docs_url: hint.docs_url,
       tags: hint.tags ?? [],
       internal: hint.internal === true,
-      networks: Array.from(new Set([
-        // Per-container networks
-        ...containerDetails.flatMap((c) => c.networks ?? []),
-        // Top-level compose networks (include real names for external ones)
-        ...composeProject.networks.map((n) => n.realName ?? n.name),
-      ])).filter((n) => n !== "default"),
+      networks: (() => {
+        // Resolve compose-alias → real name for external networks.
+        const aliasToReal = new Map<string, string>();
+        for (const n of composeProject.networks) {
+          if (n.external && n.realName) aliasToReal.set(n.name, n.realName);
+        }
+        const raw = [
+          ...containerDetails.flatMap((c) => c.networks ?? []),
+          ...composeProject.networks.map((n) => n.name),
+        ];
+        // Replace aliases with real names, deduplicate, drop "default".
+        return Array.from(new Set(raw.map((n) => aliasToReal.get(n) ?? n)))
+          .filter((n) => n !== "default");
+      })(),
       paths: {
         docker_services: `/root/docker-services/${serviceName}`,
       },
