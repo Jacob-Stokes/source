@@ -21,8 +21,10 @@ CATALOG=https://catalog.jacob.st
 OBSIDIAN=https://obsidian.jacob.st
 ICONS=https://icons.jacob.st
 FOLDER="Homelab/Services"
+SECRETS_FOLDER="Homelab/Secrets"
 ICON_FOLDER=".obsidian/icons/self-host"
-ICON_PREFIX="Sh"   # Iconize custom-pack prefix; matches your "self-host" pack settings
+ICON_PREFIX="Sh"                       # Iconize custom-pack prefix
+FORCE="${FORCE:-false}"                # set FORCE=true to re-PUT every note regardless of diff
 
 # ── helpers ────────────────────────────────────────────────────────
 
@@ -184,7 +186,7 @@ for name in $NAMES; do
     norm_old=$(awk 'BEGIN{c=0; out=""} /^---$/{c++; if(c==2){print out; exit}} {if(!/^last_synced:/) out=out"\n"$0}' <<< "$EXISTING")
     norm_new=$(awk 'BEGIN{c=0; out=""} /^---$/{c++; if(c==2){print out; exit}} {if(!/^last_synced:/) out=out"\n"$0}' <<< "$newFM")
 
-    if [ "$norm_old" = "$norm_new" ]; then
+    if [ "$norm_old" = "$norm_new" ] && [ "$FORCE" != "true" ]; then
       UNCHANGED=$((UNCHANGED+1))
       continue
     fi
@@ -220,3 +222,61 @@ done
 
 echo ""
 echo "summary: created=$CREATED updated=$UPDATED unchanged=$UNCHANGED errors=$ERRORS total=$TOTAL"
+
+# ── Secrets cross-reference ────────────────────────────────────────
+# Derive "Infisical key → which services consume it" from the catalog data.
+# Writes Homelab/Secrets/README.md.
+SECRETS_DOC=$(jq -r '
+  # Flatten services → [{key, service}]
+  [.services[]
+    | {name, secrets: (.infisical_secrets // [])}
+    | .name as $n
+    | .secrets[]
+    | {key: ., service: $n}]
+  | group_by(.key)
+  | map({key: .[0].key, services: [.[].service] | sort | unique})
+  | sort_by(.key)
+  | .
+' <<< "$SERVICES_JSON")
+
+SECRET_COUNT=$(jq 'length' <<< "$SECRETS_DOC")
+SECRETS_MD="# Secrets cross-reference
+
+**Auto-generated** by the catalog-sync process. Do not edit by hand.
+
+Maps each Infisical key name to the service(s) that consume it. **Values live only in Infisical** at \`https://secrets.jacob.st\` — this file has key names only.
+
+Last generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+Total keys referenced: $SECRET_COUNT
+
+## Key → services
+
+| Infisical key | Consumed by |
+|---|---|
+"
+# Append one row per key
+while read -r row; do
+  key=$(jq -r '.key' <<< "$row")
+  svcs=$(jq -r '.services | map("[[Services/" + . + "]]") | join(", ")' <<< "$row")
+  SECRETS_MD="${SECRETS_MD}| \`$key\` | $svcs |
+"
+done < <(jq -c '.[]' <<< "$SECRETS_DOC")
+
+SECRETS_MD="$SECRETS_MD
+## How this is generated
+
+Derived from each service's \`catalog.yml\` \`infisical_secrets:\` field (declared by the service owner) and surfaced by \`catalog.jacob.st/api/services/*.infisical_secrets\`. The sync process aggregates them here on every run.
+
+## How to update
+
+Edit the \`infisical_secrets:\` list in the relevant \`catalog.yml\` (under \`/root/docker-services/<service>/\` on resolution, or \`adventure\`). Push to the matching gitea repo. Within ~5 min the catalog re-reads; within 4h (or on manual sync) this file regenerates.
+
+Missing a secret? The service's \`catalog.yml\` probably just doesn't declare it yet.
+"
+
+SECRETS_PAYLOAD=$(jq -n --arg c "$SECRETS_MD" '{content: $c}')
+SECRETS_PATH="$SECRETS_FOLDER/README.md"
+SECRETS_ENC=$(urlenc "$SECRETS_PATH")
+SECRETS_RESP=$(cf_curl -X PUT -H "X-API-Key: $OBSIDIAN_KEY" -H "Content-Type: application/json" \
+  -d "$SECRETS_PAYLOAD" -w "%{http_code}" -o /dev/null "$OBSIDIAN/api/files/$SECRETS_ENC")
+echo "secrets: $SECRETS_PATH → HTTP $SECRETS_RESP ($SECRET_COUNT keys)"
