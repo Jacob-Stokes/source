@@ -19,7 +19,10 @@ OBSIDIAN_KEY="$(wm-secret OBSIDIAN_API_KEY)"
 
 CATALOG=https://catalog.jacob.st
 OBSIDIAN=https://obsidian.jacob.st
+ICONS=https://icons.jacob.st
 FOLDER="Homelab/Services"
+ICON_FOLDER=".obsidian/icons/self-host"
+ICON_PREFIX="Sh"   # Iconize custom-pack prefix; matches your "self-host" pack settings
 
 # ── helpers ────────────────────────────────────────────────────────
 
@@ -30,10 +33,11 @@ cf_curl() {
     "$@"
 }
 
-# Build YAML frontmatter for one service record (jq -c → multi-line YAML).
+# Build YAML frontmatter. $2 is the optional Iconize reference (e.g. "ShFileBrowser").
 build_frontmatter() {
   local svc="$1"
-  jq -r '
+  local iconize="${2:-}"
+  jq -r --arg iconize "$iconize" '
     def yamlVal(v):
       if v == null then "null"
       elif (v|type) == "string" then v
@@ -51,6 +55,7 @@ build_frontmatter() {
     "host: " + (.host // ""),
     "status: " + (.status // ""),
     "description: " + ((.description // "") | tojson),
+    "icon: " + $iconize,
     "icon_url: " + (.icon_url // ""),
     "url: " + (if (.hostnames|length) > 0 then "https://" + .hostnames[0] else "" end),
     "urls:" + yamlList((.hostnames // []) | map("https://" + .)),
@@ -78,6 +83,66 @@ build_stub_body() {
 # Encode a path segment for URL.
 urlenc() { jq -rn --arg s "$1" '$s|@uri'; }
 
+# kebab-case → PascalCase: "file-browser" → "FileBrowser"
+pascal_case() {
+  echo "$1" | awk -F'-' '{out=""; for(i=1;i<=NF;i++) out = out toupper(substr($i,1,1)) substr($i,2); print out}'
+}
+
+# Cache of icon names already ensured this run, value="" if fetch failed.
+declare -A ICON_CACHE
+
+# Ensure the SVG for a given icon_url is in the vault. Echoes the
+# Iconize reference name (e.g. "ShFileBrowser") on success, or empty
+# string on failure. Empty when icon_url is empty/upstream is 404.
+ensure_icon() {
+  local icon_url="$1"
+  [ -z "$icon_url" ] && { echo ""; return; }
+  if [ -n "${ICON_CACHE[$icon_url]+x}" ]; then
+    echo "${ICON_CACHE[$icon_url]}"
+    return
+  fi
+  local raw_name pascal vault_path code
+  raw_name=$(basename "$icon_url" .svg)
+  pascal=$(pascal_case "$raw_name")
+  vault_path="$ICON_FOLDER/$pascal.svg"
+
+  # Already in vault? skip the upstream fetch.
+  code=$(cf_curl -H "X-API-Key: $OBSIDIAN_KEY" \
+    -o /dev/null -w "%{http_code}" \
+    "$OBSIDIAN/api/files/$(urlenc "$vault_path")")
+  if [ "$code" = "200" ]; then
+    ICON_CACHE[$icon_url]="$pascal"
+    echo "$pascal"
+    return
+  fi
+
+  # Fetch upstream SVG (icons.jacob.st is unauthenticated)
+  local svg http
+  http=$(curl -s -w "%{http_code}" -o /tmp/_icon.svg "$icon_url")
+  if [ "$http" != "200" ]; then
+    ICON_CACHE[$icon_url]=""
+    echo ""
+    return
+  fi
+  svg=$(cat /tmp/_icon.svg)
+  rm -f /tmp/_icon.svg
+
+  # PUT into vault
+  local payload
+  payload=$(jq -n --arg c "$svg" '{content: $c}')
+  local put_code
+  put_code=$(cf_curl -X PUT -H "X-API-Key: $OBSIDIAN_KEY" -H "Content-Type: application/json" \
+    -d "$payload" -o /dev/null -w "%{http_code}" \
+    "$OBSIDIAN/api/files/$(urlenc "$vault_path")")
+  if [ "$put_code" = "201" ] || [ "$put_code" = "200" ]; then
+    ICON_CACHE[$icon_url]="$pascal"
+    echo "$pascal"
+  else
+    ICON_CACHE[$icon_url]=""
+    echo ""
+  fi
+}
+
 # ── main ───────────────────────────────────────────────────────────
 
 echo "fetching catalog…"
@@ -91,7 +156,15 @@ CREATED=0; UPDATED=0; UNCHANGED=0; ERRORS=0
 NAMES=$(jq -r '.services[].name' <<< "$SERVICES_JSON")
 for name in $NAMES; do
   svc=$(jq -c --arg n "$name" '.services[] | select(.name == $n)' <<< "$SERVICES_JSON")
-  newFM=$(build_frontmatter "$svc")
+
+  # Ensure the icon SVG is in the vault and get its Iconize reference name.
+  # Empty string if no icon_url or upstream 404 — then `icon:` field will be empty.
+  icon_url=$(jq -r '.icon_url // ""' <<< "$svc")
+  pascal=$(ensure_icon "$icon_url")
+  iconize=""
+  [ -n "$pascal" ] && iconize="${ICON_PREFIX}${pascal}"
+
+  newFM=$(build_frontmatter "$svc" "$iconize")
   filePath="$FOLDER/$name.md"
   encPath=$(urlenc "$filePath")
 
