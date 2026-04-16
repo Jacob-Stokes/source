@@ -233,6 +233,10 @@ app.get('/api/claude-usage', requireApiKeyOrBasicAuth, async (req, res) => {
 });
 
 app.get('/api/codex-usage', requireApiKeyOrBasicAuth, async (req, res) => {
+  if (req.query.force === 'true') {
+    codexUsageCache = null;
+    codexUsageCacheTime = 0;
+  }
   const usage = await fetchCodexUsage();
   if (usage) res.json(usage);
   else res.status(503).json({ error: 'Could not fetch Codex usage' });
