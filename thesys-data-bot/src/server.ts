@@ -4,7 +4,7 @@
 import { Telegraf } from "telegraf";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { ChatDB, Role } from "./db.js";
-import { discoverSkills } from "./skills.js";
+import { discoverSkills, skillsBlock } from "./skills.js";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 if (!BOT_TOKEN) throw new Error("TELEGRAM_BOT_TOKEN env var required");
@@ -53,10 +53,16 @@ const SYSTEM_PROMPT = process.env.SYSTEM_PROMPT || `You are Jacob's daily helper
 - Prefer concrete over abstract. Numbers, URLs, container names, timestamps.
 - If a tool call takes > few seconds, that's fine — Telegram shows "typing…" automatically.`;
 
-// Log skills once at startup
+// Load skills once at startup + log them
 const skills = discoverSkills();
 console.log(`loaded ${skills.length} skills:`);
-for (const s of skills) console.log(`  - ${s.name}`);
+for (const s of skills) console.log(`  - ${s.name} (${s.body.length} chars)`);
+
+// Full system prompt = persona + glossary/behavior + every skill's full body.
+// We inject skill bodies explicitly rather than relying on the Agent SDK's
+// auto-loading, which may or may not find them depending on version.
+const FULL_SYSTEM = [SYSTEM_PROMPT, skillsBlock(skills)].filter(Boolean).join("\n\n");
+console.log(`system prompt: ${FULL_SYSTEM.length} chars`);
 
 const db = new ChatDB(DB_PATH);
 const bot = new Telegraf(BOT_TOKEN);
@@ -126,7 +132,7 @@ bot.on("message", async (ctx) => {
       prompt: conversationPrompt,
       options: {
         model: MODEL,
-        systemPrompt: SYSTEM_PROMPT,
+        systemPrompt: FULL_SYSTEM,
         maxTurns: 5,
         // Enable the built-in tool set that skills expect (Bash for curl, Read/Write
         // for file ops). Skills loaded from ~/.claude/skills are auto-discovered

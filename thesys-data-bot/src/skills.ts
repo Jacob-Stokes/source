@@ -1,27 +1,28 @@
-// Discovers installed Claude Code skills at ~/.claude/skills/<name>/SKILL.md
-// and makes them available for the Agent SDK to load. Each skill is a
-// markdown file with YAML frontmatter (name + description) — the Agent SDK's
-// built-in skill loader picks them up automatically when the skills dir is
-// present. This file exists to surface skill info for logging + health checks.
+// Reads ~/.claude/skills/<name>/SKILL.md and returns both the metadata
+// (for logging / the /skills command) and the full content (for explicit
+// injection into the system prompt). We don't rely on the Agent SDK's
+// implicit skill-loading — we inject the content ourselves so the model
+// always has it.
 import fs from "node:fs";
 import path from "node:path";
 
 export interface SkillInfo {
   name: string;
   description: string;
+  body: string; // markdown after the frontmatter
   path: string;
 }
 
 const SKILLS_DIR = process.env.SKILLS_DIR || path.join(process.env.HOME || "/root", ".claude/skills");
 
-// Parse the `name:` and `description:` out of a SKILL.md's frontmatter.
-function parseFrontmatter(md: string): { name?: string; description?: string } {
-  const m = md.match(/^---\s*\n([\s\S]*?)\n---/);
-  if (!m) return {};
+function parseFrontmatter(md: string): { name?: string; description?: string; body: string } {
+  const m = md.match(/^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
+  if (!m) return { body: md };
   const fm = m[1];
+  const body = m[2];
   const name = fm.match(/^name:\s*(.+)$/m)?.[1]?.trim();
   const description = fm.match(/^description:\s*([\s\S]+?)(?=\n[a-z_]+:|$)/m)?.[1]?.trim();
-  return { name, description };
+  return { name, description, body };
 }
 
 export function discoverSkills(): SkillInfo[] {
@@ -36,9 +37,23 @@ export function discoverSkills(): SkillInfo[] {
       out.push({
         name: fm.name,
         description: fm.description || "",
+        body: fm.body,
         path: skillFile,
       });
     }
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// Build a single concatenated block of all skills for the system prompt.
+export function skillsBlock(skills: SkillInfo[]): string {
+  if (skills.length === 0) return "";
+  const sections = skills.map((s) => `## Skill: ${s.name}\n\n${s.body.trim()}`);
+  return [
+    "# Available skills",
+    "",
+    "The following skill documents are available to you. Read them carefully — they contain the auth patterns, API shapes, and conventions for Jacob's homelab. Use them BEFORE asking clarifying questions or guessing.",
+    "",
+    sections.join("\n\n---\n\n"),
+  ].join("\n");
 }
