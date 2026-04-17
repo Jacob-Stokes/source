@@ -26,6 +26,7 @@ export interface ContainerDetail {
 export interface ServiceRecord {
   name: string;
   category?: string;
+  type: "app" | "agent";         // always filled in; defaults to "app"
   description?: string;
   hostnames: string[];
   containers: string[];        // names Beszel actually sees (legacy / shorthand)
@@ -52,6 +53,26 @@ export interface ServiceRecord {
   };
   networks: string[];             // deduplicated list of docker networks this service connects to
   icon_url?: string;             // selfh.st/icons URL — undefined if explicitly suppressed
+  // Agent-facing fields — tell a caller how to reach + authenticate to this service
+  // without them hardcoding recipes per service.
+  urls?: {
+    internal?: string;           // container-local base, e.g. "http://grimmory:6060"
+    public?: string;             // public base, e.g. "https://books.jacob.st"
+    api_base_path?: string;      // append to either for the API root, e.g. "/api/v1"
+  };
+  auth?: {
+    type: "x-api-key" | "bearer" | "jwt-login" | "greader" | "none";
+    header?: string;
+    secret?: {
+      key?: string;
+      username?: string;
+      password?: string;
+      user?: string;
+      token?: string;
+    };
+    login_path?: string;
+    token_path?: string;
+  };
   updated_at: string;
 }
 
@@ -164,6 +185,7 @@ export function buildCatalog(
     services.push({
       name: serviceName,
       category: hint.category,
+      type: hint.type ?? "app",
       description: hint.description,
       hostnames,
       containers: runningContainers,
@@ -203,6 +225,8 @@ export function buildCatalog(
       icon_url: hint.icon === false
         ? undefined
         : `${ICONS_BASE}/${typeof hint.icon === "string" ? hint.icon : serviceName}.svg`,
+      urls: buildUrls(serviceName, hostnames, containerDetails, hint),
+      auth: hint.auth,
       updated_at: new Date().toISOString(),
     });
   }
@@ -231,6 +255,38 @@ export function buildCatalog(
   };
 
   return { services, infra };
+}
+
+// Build the `urls` object — internal URL derived from the first container on
+// thesys-net and its first published port; public URL from first hostname.
+// Both can be overridden via `hint.urls`.
+function buildUrls(
+  serviceName: string,
+  hostnames: string[],
+  containerDetails: ContainerDetail[],
+  hint: ServiceCatalogFile,
+): ServiceRecord["urls"] {
+  const override = hint.urls ?? {};
+  // Internal: prefer first thesys-net container with a port, fallback to first container
+  let internal = override.internal;
+  if (!internal) {
+    const onThesysNet = containerDetails.find((c) =>
+      (c.networks ?? []).some((n) => n === "thesys-net"),
+    );
+    const pick = onThesysNet ?? containerDetails[0];
+    if (pick?.ports?.length) {
+      // Port format is "127.0.0.1:3350:3000" or "3000:3000" — take the container-side (last) port
+      const first = pick.ports[0];
+      const containerPort = first.split(":").pop();
+      if (containerPort) internal = `http://${pick.name}:${containerPort}`;
+    }
+  }
+  const publicUrl = hostnames[0] ? `https://${hostnames[0]}` : undefined;
+  const out: NonNullable<ServiceRecord["urls"]> = {};
+  if (internal) out.internal = internal;
+  if (publicUrl) out.public = publicUrl;
+  if (override.api_base_path) out.api_base_path = override.api_base_path;
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function inferHostnames(service: string, tunnel: TunnelRoute[]): string[] {

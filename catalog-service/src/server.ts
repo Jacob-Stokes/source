@@ -7,6 +7,7 @@ import { fetchBeszelState } from "./sources/beszel.js";
 import { readTunnelRoutes } from "./sources/tunnel.js";
 import { fetchAccessApps } from "./sources/access.js";
 import { readCatalogHints } from "./sources/catalogs.js";
+import { readGlossary, readHosts } from "./sources/glossary.js";
 import { buildCatalog, ServiceRecord } from "./join.js";
 import { listKeys, createKey, revokeKey, validate } from "./keys.js";
 
@@ -136,7 +137,24 @@ app.get("/api/by-url/:hostname", async (c) => {
 
 app.get("/api/infrastructure", async (c) => {
   const { infra, builtAt } = await rebuild();
-  return c.json({ builtAt: new Date(builtAt).toISOString(), ...infra });
+  // Merge host descriptions from hosts.yml into each host record.
+  const hostsHints = readHosts().hosts ?? {};
+  const hosts = infra.hosts.map((h) => ({
+    ...h,
+    description: hostsHints[h.name]?.description,
+  }));
+  return c.json({ builtAt: new Date(builtAt).toISOString(), ...infra, hosts });
+});
+
+// Glossary: the "where does X live" routing map. Agents should hit this
+// BEFORE picking a service to query for a user question.
+app.get("/api/glossary", async (_c) => {
+  const glossary = readGlossary();
+  const hostsHints = readHosts().hosts ?? {};
+  return _c.json({
+    routing: glossary.routing ?? {},
+    hosts: hostsHints,
+  });
 });
 
 // ── Key management (admin browser only) ────────────────────────────
