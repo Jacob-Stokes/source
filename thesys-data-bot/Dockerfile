@@ -8,7 +8,7 @@ RUN npm run build
 
 FROM node:22-alpine
 WORKDIR /app
-RUN apk add --no-cache tini git curl bash jq python3
+RUN apk add --no-cache tini git curl bash jq python3 sqlite yq
 # better-sqlite3 is native; bring node_modules from build stage (compiled)
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
