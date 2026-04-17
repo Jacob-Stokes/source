@@ -17,14 +17,42 @@ import { fetchSecret } from "./infisical.js";
 
 const execFileP = promisify(execFile);
 
-// Uncaught-exception safety net: the Agent SDK's internal p-timeout can throw
-// from setTimeout callbacks, bypassing try/catch. Log and stay alive instead
-// of crashing the whole bot mid-conversation.
+// Active-query tracker so we can tell the user when their turn dies from
+// an uncaught Agent SDK timeout (p-timeout throws from setTimeout callbacks,
+// bypassing try/catch). Keyed by chat_id → Telegram message_id of the
+// placeholder we posted at the start of the run.
+const activeQueries = new Map<number, { msgId: number; startedAt: number; queryId: number }>();
+
+async function notifyAndClear(reason: string) {
+  if (activeQueries.size === 0) return;
+  const entries = Array.from(activeQueries.entries());
+  activeQueries.clear();
+  for (const [chatId, info] of entries) {
+    const sec = Math.round((Date.now() - info.startedAt) / 1000);
+    const text = `⚠️ turn died after ${sec}s — ${reason}. No reply was produced.`;
+    try {
+      await botInstance.telegram.editMessageText(chatId, info.msgId, undefined, text);
+    } catch {
+      try { await botInstance.telegram.sendMessage(chatId, text); } catch { /* give up */ }
+    }
+  }
+}
+
+// Declared up here so the exception handlers can reach it; bound below.
+let botInstance: Telegraf;
+
+// Uncaught-exception safety net: catch p-timeout, tell the affected chat(s),
+// keep the process alive.
 process.on("uncaughtException", (e) => {
   console.error("[uncaughtException]", e);
+  const reason = /timed out/i.test(String(e?.message ?? e))
+    ? "Agent SDK 90-second timeout (prompt too big or LLM too slow on this turn)"
+    : `uncaught error: ${e?.message ?? e}`;
+  notifyAndClear(reason).catch(() => {});
 });
-process.on("unhandledRejection", (e) => {
+process.on("unhandledRejection", (e: any) => {
   console.error("[unhandledRejection]", e);
+  notifyAndClear(`unhandled rejection: ${e?.message ?? e}`).catch(() => {});
 });
 
 const BOT_NAME = process.env.BOT_NAME;
@@ -214,6 +242,7 @@ function buildSystemPrompt(): string {
 
 const db = new ChatDB(DB_PATH);
 const bot = new Telegraf(BOT_TOKEN);
+botInstance = bot;
 
 // Allowlist middleware — silently drop any stranger.
 bot.use(async (ctx, next) => {
@@ -296,6 +325,8 @@ bot.on("message", async (ctx) => {
 
   db.saveTurn(chatId, "user", msg);
   const queryId = db.startQuery(chatId, msg);
+  // Track so uncaughtException can tell the user this turn died, not just silence it.
+  activeQueries.set(chatId, { msgId, startedAt: t0, queryId });
   const toolInputById = new Map<string, { tool: string; input: any; idx: number }>();
   let toolIdx = 0;
   const history = db.getRecentTurns(chatId, HISTORY_LIMIT);
@@ -392,8 +423,14 @@ bot.on("message", async (ctx) => {
               }
             }
           } else {
-            // Pure-text assistant message — this is the final answer (or part of it)
-            finalText += textBlocks;
+            // Pure-text assistant message. Claude often emits preamble text
+            // ("Now let me do X") as its own no-tool_use message followed by
+            // a separate tool_use message, so we CANNOT safely accumulate —
+            // we'd concatenate preamble from N turns into one blob. Overwrite
+            // instead: the LAST pure-text message before `result` wins. In a
+            // normal flow that's the actual final answer; in an error flow
+            // (max_turns etc.) the result handler below replaces it anyway.
+            if (textBlocks) finalText = textBlocks;
           }
         }
         currentMsgText = "";
@@ -440,10 +477,22 @@ bot.on("message", async (ctx) => {
           cache_read: u.cache_read_input_tokens,
           cache_create: u.cache_creation_input_tokens,
         });
+        // On non-success stop reasons (max_turns, error_*), overwrite finalText
+        // with a clear banner. Don't leak whatever partial text was sitting in
+        // the buffer — it's almost never the user-facing answer.
+        if (r.subtype && r.subtype !== "success" && r.subtype !== "end_turn") {
+          const reason = r.subtype === "error_max_turns"
+            ? `hit max_turns (${r.num_turns ?? "?"}) without reaching a final answer`
+            : `stopped: ${r.subtype}`;
+          finalText = `⚠️ ${reason}. Ran ${toolIdx} tool call(s) over ${Math.round(durationMs / 1000)}s; no final reply produced. Try a simpler query or split it in two.`;
+        }
       }
     }
 
     clearInterval(typingInterval);
+    // Normal completion — clear from the active-query tracker so a later
+    // uncaughtException doesn't falsely attribute an error to this chat.
+    activeQueries.delete(chatId);
     finalText = finalText.trim() || "(no response — likely hit max_turns or stopped mid-tool)";
     db.saveTurn(chatId, "assistant", finalText);
     // Stamp final_text on the query row so `queries` + `tool_calls` form a
@@ -472,6 +521,7 @@ bot.on("message", async (ctx) => {
     }
   } catch (e: any) {
     clearInterval(typingInterval);
+    activeQueries.delete(chatId);
     console.error(`[${chatId}] agent error:`, e);
     const errText = `⚠️ error: ${e.message ?? String(e)}`;
     await ctx.telegram.editMessageText(chatId, msgId, undefined, errText).catch(() => {
