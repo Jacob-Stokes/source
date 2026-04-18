@@ -240,6 +240,44 @@ function buildSystemPrompt(): string {
   return SYSTEM_PROMPT;
 }
 
+// ── Custom-URL-scheme link extraction (obsidian://, etc.) ──
+//
+// Telegram's Markdown/MarkdownV2 parsers only render [text](url) as a tappable
+// link for http/https/tg URL schemes. Any other scheme (obsidian://, ton://,
+// etc.) renders as plain text — the URL is stripped entirely. Workaround:
+// detect these links in the agent's output, remove them from the message body,
+// and attach them as inline-keyboard buttons (which DO support any scheme).
+
+const CUSTOM_SCHEMES = ["obsidian", "tg", "ton"]; // URL schemes Telegram Markdown won't render as links
+const CUSTOM_LINK_RE = new RegExp(
+  `\\[([^\\]]+)\\]\\((${CUSTOM_SCHEMES.join("|")})://([^)]+)\\)`,
+  "g",
+);
+
+interface Btn { text: string; url: string; }
+
+function extractCustomSchemeLinks(text: string): { cleaned: string; buttons: Btn[] } {
+  const buttons: Btn[] = [];
+  const cleaned = text.replace(CUSTOM_LINK_RE, (_m, label: string, scheme: string, rest: string) => {
+    const url = `${scheme}://${rest}`;
+    // Label the button with an app emoji + the original link text.
+    const emoji = scheme === "obsidian" ? "📓 " : scheme === "tg" ? "💬 " : "🔗 ";
+    buttons.push({ text: `${emoji}${label}`, url });
+    // Keep the label inline as plain text so the message still reads naturally.
+    return label;
+  });
+  return { cleaned, buttons };
+}
+
+// Telegram inline keyboards allow multiple rows; 1-2 buttons per row looks best.
+function chunkButtons(btns: Btn[]): Btn[][] {
+  const rows: Btn[][] = [];
+  for (let i = 0; i < btns.length; i += 2) {
+    rows.push(btns.slice(i, i + 2));
+  }
+  return rows;
+}
+
 const db = new ChatDB(DB_PATH);
 const bot = new Telegraf(BOT_TOKEN);
 botInstance = bot;
@@ -381,6 +419,10 @@ bot.on("message", async (ctx) => {
         // and loads the full body on demand when the agent invokes the Skill tool.
         settingSources: ["user"],
         allowedTools: config.allowed_tools,
+        // MCP servers — typed tool endpoints the bot can call instead of
+        // Bash+curl. Each server advertises its own tools; SDK adds them to
+        // the available tool list automatically (names prefixed mcp__<server>__<tool>).
+        mcpServers: config.mcp_servers as any,
       },
     });
 
@@ -500,19 +542,30 @@ bot.on("message", async (ctx) => {
     db.finishQueryFinalText(queryId, finalText);
     db.trim(chatId);
 
-    // Final edit: try Markdown parse_mode first; if it fails (unbalanced *, stray [, etc.)
-    // fall back to plain text so the user still sees the answer.
-    const firstChunk = finalText.slice(0, 4000);
+    // Telegram's Markdown parser rejects custom URL schemes (obsidian://,
+    // tg://, etc.) inside [text](url) links — strips them from the rendered
+    // text. Workaround: extract them and attach as inline-keyboard buttons,
+    // which DO support any URL scheme. Keep the label inline where the link
+    // was, so the body still reads naturally.
+    const { cleaned: cleanedText, buttons } = extractCustomSchemeLinks(finalText);
+    const firstChunk = cleanedText.slice(0, 4000);
+    const reply_markup = buttons.length > 0
+      ? { inline_keyboard: chunkButtons(buttons) }
+      : undefined;
+
     const tryEdit = async (mode?: "Markdown") => {
-      await ctx.telegram.editMessageText(chatId, msgId, undefined, firstChunk, mode ? { parse_mode: mode } : {});
+      await ctx.telegram.editMessageText(chatId, msgId, undefined, firstChunk, {
+        ...(mode ? { parse_mode: mode } : {}),
+        ...(reply_markup ? { reply_markup } : {}),
+      });
     };
     try {
       await tryEdit("Markdown");
     } catch {
-      try { await tryEdit(); } catch { await ctx.reply(firstChunk); }
+      try { await tryEdit(); } catch { await ctx.reply(firstChunk, reply_markup ? { reply_markup } : {}); }
     }
-    for (let i = 4000; i < finalText.length; i += 4000) {
-      const part = finalText.slice(i, i + 4000);
+    for (let i = 4000; i < cleanedText.length; i += 4000) {
+      const part = cleanedText.slice(i, i + 4000);
       try {
         await ctx.reply(part, { parse_mode: "Markdown" });
       } catch {
