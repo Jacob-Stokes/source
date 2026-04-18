@@ -4,7 +4,7 @@ services:
     container_name: cost-tracker
     restart: unless-stopped
     ports:
-      - "3200:3200"
+      - "127.0.0.1:3200:3200"
     volumes:
       - /root/data:/data
       - /root/.claude/.credentials.json:/data/claude-credentials.json:ro
@@ -15,7 +15,11 @@ services:
       - API_KEY_FILE=/data/cost-api-key
       - DASH_USER=${DASH_USER}
       - DASH_PASS=${DASH_PASS}
-      - WINDMILL_URL=http://host.docker.internal:3100
+      - WINDMILL_URL=http://windmill-windmill_server-1:8000
       - WINDMILL_TOKEN=${WINDMILL_TOKEN}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    networks:
+      - thesys-net
+
+networks:
+  thesys-net:
+    external: true
