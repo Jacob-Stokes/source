@@ -1,8 +1,8 @@
 FROM node:22-alpine
 RUN apk add --no-cache python3 make g++
 WORKDIR /app
-COPY package.json .
+COPY cost-tracker/package.json .
 RUN npm install --production
-COPY . .
+COPY cost-tracker/ .
 EXPOSE 3200
 CMD ["node", "server.js"]

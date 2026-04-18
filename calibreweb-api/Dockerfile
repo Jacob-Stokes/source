@@ -2,10 +2,10 @@ FROM oven/bun:1-alpine
 
 WORKDIR /app
 
-COPY package.json ./
+COPY calibreweb-api/package.json ./
 RUN bun install --frozen-lockfile
 
-COPY src/ ./src/
+COPY calibreweb-api/src/ ./src/
 
 EXPOSE 3000
 

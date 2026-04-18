@@ -18,6 +18,8 @@ jobs:
       - id: find
         run: |
           # Any top-level dir with a Dockerfile becomes a service.
+          # Top-level source-only libraries (mcp-common) are intentionally
+          # skipped — they don't ship a Dockerfile.
           services=$(find . -maxdepth 2 -name Dockerfile -not -path './.*' \
             | sed -E 's|^\./||; s|/Dockerfile$||' \
             | jq -R . | jq -sc .)
@@ -54,7 +56,12 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: ./${{ matrix.service }}
+          # Build context is the monorepo root so Dockerfiles can COPY from
+          # sibling directories (e.g. MCP sidecars pulling in mcp-common).
+          # Each service's Dockerfile therefore prefixes its COPY paths with
+          # the service name, e.g. `COPY thesys-mcp/package.json ./`.
+          context: .
+          file: ./${{ matrix.service }}/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

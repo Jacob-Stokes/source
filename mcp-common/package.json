@@ -1,22 +1,22 @@
 {
-  "name": "catalog-mcp",
+  "name": "mcp-common",
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "build": "tsc",
-    "start": "node dist/server.js",
-    "test-client": "tsx src/test-client.ts"
+    "build": "tsc"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "mcp-common": "file:../mcp-common",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/node": "^20",
-    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }

@@ -5,6 +5,14 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 
+export interface McpServerConfig {
+  type: "sse" | "http" | "stdio";
+  url?: string;                    // for sse/http
+  command?: string;                // for stdio
+  args?: string[];                 // for stdio
+  headers?: Record<string, string>; // for sse/http — values may reference ${ENV_VAR}
+}
+
 export interface BotConfig {
   name: string;
   description?: string;
@@ -16,6 +24,7 @@ export interface BotConfig {
   history_limit: number;
   allowed_tools: string[];
   system_prompt: string;
+  mcp_servers?: Record<string, McpServerConfig>;
 }
 
 const DEFAULTS: Omit<BotConfig, "name" | "system_prompt" | "allowed_user_ids"> = {
@@ -71,5 +80,32 @@ function validate(cfg: any): BotConfig {
   if (!Array.isArray(cfg.allowed_user_ids) || cfg.allowed_user_ids.length === 0) {
     throw new Error(`bot config '${cfg.name}': allowed_user_ids must be a non-empty array`);
   }
+  if (cfg.mcp_servers) cfg.mcp_servers = interpolateMcpServers(cfg.mcp_servers);
   return cfg as BotConfig;
+}
+
+// Expand ${ENV_VAR} patterns in MCP headers so configs can reference secrets
+// without embedding them in the public claude-bots repo.
+function interpolateMcpServers(
+  servers: Record<string, McpServerConfig>,
+): Record<string, McpServerConfig> {
+  const out: Record<string, McpServerConfig> = {};
+  for (const [name, cfg] of Object.entries(servers)) {
+    const copy: McpServerConfig = { ...cfg };
+    if (cfg.headers) {
+      copy.headers = {};
+      for (const [k, v] of Object.entries(cfg.headers)) {
+        copy.headers[k] = v.replace(/\$\{([A-Z0-9_]+)\}/g, (_, varName) => {
+          const val = process.env[varName];
+          if (!val) {
+            console.warn(`[mcp] '${name}.headers.${k}' references env var ${varName} which is not set`);
+            return "";
+          }
+          return val;
+        });
+      }
+    }
+    out[name] = copy;
+  }
+  return out;
 }

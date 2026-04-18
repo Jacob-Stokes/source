@@ -1,6 +1,6 @@
 // Minimal Infisical universal-auth client — caches access token for its TTL.
-// Used at server boot to fetch THESYS_API_KEY; that value is then cached in
-// memory for the lifetime of the process.
+// Used by MCPs to fetch backend service secrets at boot. The universal-auth
+// creds themselves (client id + secret + project + domain) come from env.
 
 interface TokenState {
   token: string;
