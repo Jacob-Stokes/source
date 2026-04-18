@@ -56,12 +56,15 @@ export const FILES_TOOL = {
     "right top-level folder (Scratch/ for tests, Homelab/ for infra, Agents/ for agent stuff, etc.). " +
     "Paths are vault-relative and should include .md extensions. Examples: 'Journal/2026-04-18.md', " +
     "'Scratch/notes.md', 'Homelab/Decisions/008-something.md'. " +
-    // Vault-name constant baked into the tool so agents don't drift when
-    // constructing obsidian:// deep links in replies:
-    "When constructing obsidian:// deep links in user-facing replies, the vault name is the EXACT " +
-    "literal string 'thesys-vault' — all-lowercase, hyphenated. NOT 'Thesys Vault', NOT 'ThesysVault', " +
-    "NOT URL-encoded. Template: obsidian://open?vault=thesys-vault&file=<URL_ENCODED_PATH_WITHOUT_.MD>. " +
-    "Example: obsidian://open?vault=thesys-vault&file=Scratch%2Fnotes",
+    // User-facing reply instruction: do NOT emit obsidian:// deep links in
+    // replies. Telegram (the bot's main channel) blocks non-http/https URL
+    // schemes everywhere (markdown links AND inline keyboard buttons — the API
+    // rejects them with 'Unsupported URL protocol'). When mentioning a file
+    // you've just written/read, just quote the path in backticks, e.g.:
+    //   Written to `Scratch/notes.md`.
+    "When replying to the user about a file, cite the path in backticks — do NOT construct obsidian:// " +
+    "deep links. Telegram rejects custom URL schemes; the deep link will either be stripped to plain " +
+    "text or produce an error.",
   inputSchema: FilesInput,
 };
 
