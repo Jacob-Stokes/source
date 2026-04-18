@@ -52,10 +52,16 @@ export const FILES_TOOL = {
   name: "obsidian_files",
   description:
     "Read/write/delete/move vault files with bulk variants. Parent folders auto-created on write. " +
-    "Before writing, you should typically read /Home.md (the vault's orientation doc) to pick the " +
+    "Before writing, you should typically read 'Home.md' (the vault's orientation doc) to pick the " +
     "right top-level folder (Scratch/ for tests, Homelab/ for infra, Agents/ for agent stuff, etc.). " +
-    "Paths are vault-relative and should include .md extensions. Paths like 'Journal/2026-04-18.md' " +
-    "or 'Scratch/notes.md'.",
+    "Paths are vault-relative and should include .md extensions. Examples: 'Journal/2026-04-18.md', " +
+    "'Scratch/notes.md', 'Homelab/Decisions/008-something.md'. " +
+    // Vault-name constant baked into the tool so agents don't drift when
+    // constructing obsidian:// deep links in replies:
+    "When constructing obsidian:// deep links in user-facing replies, the vault name is the EXACT " +
+    "literal string 'thesys-vault' — all-lowercase, hyphenated. NOT 'Thesys Vault', NOT 'ThesysVault', " +
+    "NOT URL-encoded. Template: obsidian://open?vault=thesys-vault&file=<URL_ENCODED_PATH_WITHOUT_.MD>. " +
+    "Example: obsidian://open?vault=thesys-vault&file=Scratch%2Fnotes",
   inputSchema: FilesInput,
 };
 
