@@ -34,10 +34,22 @@ try {
   process.exit(1);
 }
 
+// OAuth opt-in. Set MCP_OAUTH_ISSUER + MCP_OAUTH_AUDIENCE to enable dual-auth.
+const oauth = process.env.MCP_OAUTH_ISSUER
+  ? {
+      issuer: process.env.MCP_OAUTH_ISSUER,
+      canonicalUrl: process.env.MCP_OAUTH_CANONICAL_URL || "https://thesys-mcp.jacob.st",
+      jwksUri: process.env.MCP_OAUTH_JWKS_URI,
+      audience: process.env.MCP_OAUTH_AUDIENCE,
+      scopesSupported: (process.env.MCP_OAUTH_SCOPES || "openid email profile").split(/\s+/),
+    }
+  : undefined;
+
 await startMcp({
   name: "thesys-mcp",
   port: PORT,
   bearerToken: MCP_BEARER_TOKEN,
+  oauth,
   tools: [
     { def: { ...TASKS_TOOL,    inputSchema: TasksInput },    handler: (i) => handleTasks(client, i) },
     { def: { ...EVENTS_TOOL,   inputSchema: EventsInput },   handler: (i) => handleEvents(client, i) },

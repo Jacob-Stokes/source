@@ -29,10 +29,22 @@ try {
   process.exit(1);
 }
 
+// OAuth opt-in. Set MCP_OAUTH_ISSUER + MCP_OAUTH_AUDIENCE to enable dual-auth.
+const oauth = process.env.MCP_OAUTH_ISSUER
+  ? {
+      issuer: process.env.MCP_OAUTH_ISSUER,
+      canonicalUrl: process.env.MCP_OAUTH_CANONICAL_URL || "https://catalog-mcp.jacob.st",
+      jwksUri: process.env.MCP_OAUTH_JWKS_URI,
+      audience: process.env.MCP_OAUTH_AUDIENCE,
+      scopesSupported: (process.env.MCP_OAUTH_SCOPES || "openid email profile").split(/\s+/),
+    }
+  : undefined;
+
 await startMcp({
   name: "catalog-mcp",
   port: PORT,
   bearerToken: MCP_BEARER_TOKEN,
+  oauth,
   tools: [
     { def: { ...SERVICES_TOOL,       inputSchema: ServicesInput },       handler: (i) => handleServices(client, i) },
     { def: { ...GLOSSARY_TOOL,       inputSchema: GlossaryInput },       handler: (i) => handleGlossary(client, i) },
