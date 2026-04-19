@@ -30,10 +30,22 @@ try {
   process.exit(1);
 }
 
+// OAuth is opt-in. Set MCP_OAUTH_ISSUER + MCP_OAUTH_CANONICAL_URL to enable.
+// Bot + CLI continue working on static bearer regardless.
+const oauth = process.env.MCP_OAUTH_ISSUER
+  ? {
+      issuer: process.env.MCP_OAUTH_ISSUER,
+      canonicalUrl: process.env.MCP_OAUTH_CANONICAL_URL || "https://obsidian-mcp.jacob.st",
+      jwksUri: process.env.MCP_OAUTH_JWKS_URI,
+      scopesSupported: (process.env.MCP_OAUTH_SCOPES || "openid email profile").split(/\s+/),
+    }
+  : undefined;
+
 await startMcp({
   name: "obsidian-mcp",
   port: PORT,
   bearerToken: MCP_BEARER_TOKEN,
+  oauth,
   tools: [
     { def: { ...FILES_TOOL,   inputSchema: FilesInput },   handler: (i) => handleFiles(client, i) },
     { def: { ...FOLDERS_TOOL, inputSchema: FoldersInput }, handler: (i) => handleFolders(client, i) },
