@@ -37,6 +37,7 @@ const oauth = process.env.MCP_OAUTH_ISSUER
       issuer: process.env.MCP_OAUTH_ISSUER,
       canonicalUrl: process.env.MCP_OAUTH_CANONICAL_URL || "https://obsidian-mcp.jacob.st",
       jwksUri: process.env.MCP_OAUTH_JWKS_URI,
+      audience: process.env.MCP_OAUTH_AUDIENCE, // e.g. Authentik client_id
       scopesSupported: (process.env.MCP_OAUTH_SCOPES || "openid email profile").split(/\s+/),
     }
   : undefined;

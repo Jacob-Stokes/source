@@ -65,6 +65,14 @@ export interface OAuthOptions {
    * Authentik. Auto-derived from `issuer` if omitted.
    */
   jwksUri?: string;
+  /**
+   * Expected JWT `aud` claim(s). Defaults to `canonicalUrl`, which is
+   * RFC 8707 spec-compliant. Authentik (2026.2.x) does NOT honour the
+   * resource indicator and instead puts the OAuth client_id in `aud`;
+   * pass the client_id as the expected audience in that case. Accepts
+   * an array to allow either form.
+   */
+  audience?: string | string[];
   /** Scopes advertised in the resource metadata document. */
   scopesSupported?: string[];
 }
@@ -135,7 +143,7 @@ export async function startMcp(opts: StartMcpOptions): Promise<void> {
       try {
         await jwtVerify(token, jwks, {
           issuer: oauth.issuer,
-          audience: oauth.canonicalUrl,
+          audience: oauth.audience ?? oauth.canonicalUrl,
         });
         return true;
       } catch {
