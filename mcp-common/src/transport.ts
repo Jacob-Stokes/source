@@ -1,19 +1,35 @@
-// HTTP+SSE transport for MCP servers. Wraps the @modelcontextprotocol/sdk
-// server with:
-//   - Bearer-token auth for clients
-//   - A public /health endpoint (for docker + catalog pings)
-//   - Per-session transport management (one Server instance per SSE client)
-//   - Graceful shutdown on SIGINT/SIGTERM
+// HTTP transport for MCP servers, with dual-auth + dual-transport support.
+//
+// Transports offered (same codebase, both endpoints):
+//   - Streamable HTTP (/mcp)   — modern, used by ChatGPT, Claude.ai, Claude Desktop
+//   - SSE + POST (/sse + /message) — legacy, kept for existing bot
+//
+// Auth modes (evaluated in order per request):
+//   1. Static bearer   — `Authorization: Bearer <MCP_BEARER_TOKEN>`
+//                        Used by the Telegram bot + Claude Code CLI on the host.
+//                        Configured via `bearerToken` arg.
+//   2. OAuth 2.1 JWT   — `Authorization: Bearer <JWT>`
+//                        Used by remote clients (ChatGPT, Claude Desktop) via an
+//                        authorization server (Authentik). Configured via `oauth`
+//                        arg. If absent, OAuth mode is disabled.
+//
+// When OAuth is enabled:
+//   - Publishes /.well-known/oauth-protected-resource (RFC 9728)
+//   - 401 responses include WWW-Authenticate with resource_metadata URL
+//   - JWT signature + audience + expiry validated via JWKS
 //
 // Each MCP calls `startMcp(opts)` at the end of its own server.ts boot.
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { randomUUID } from "node:crypto";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
+import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
 import { z } from "zod";
 import { zodToJsonSchema } from "./schema.js";
 
@@ -24,41 +40,128 @@ export interface ToolDefinition {
 }
 
 export interface ToolRegistration {
-  /** Advertised metadata: name, description, inputSchema (zod). */
   def: ToolDefinition;
-  /** Called after zod validates input successfully. Return a JSON-serializable result. */
   handler: (input: any) => Promise<any>;
 }
 
-export interface StartMcpOptions {
-  /** Appears in MCP protocol handshake + /health response. */
-  name: string;
-  /** Semver-ish. Optional, defaults to 0.1.0. */
-  version?: string;
-  /** Port to listen on — 0.0.0.0 bind. */
-  port: number;
-  /** Required bearer token for all non-/health endpoints. */
-  bearerToken: string;
-  /** Tools advertised to clients + dispatched on callTool. */
-  tools: ToolRegistration[];
+export interface OAuthOptions {
   /**
-   * Optional backend-error formatter. If your backend client throws a
-   * typed error class (e.g. ThesysError, ObsidianError), pass a function
-   * here that formats it into a clean isError response for the agent.
-   * Return null to fall through to the default "error: <msg>" shape.
+   * Canonical public URL of this MCP as served to external clients — used as
+   * the JWT `aud` claim target and as the `resource` identifier in Protected
+   * Resource Metadata (RFC 9728).
+   *
+   * e.g. "https://obsidian-mcp.jacob.st"
    */
+  canonicalUrl: string;
+  /**
+   * OAuth 2.1 authorization server base URL (the `iss` claim in issued JWTs).
+   * Protected Resource Metadata points clients here for OIDC discovery.
+   *
+   * e.g. "https://auth.jacob.st/application/o/obsidian-mcp/"
+   */
+  issuer: string;
+  /**
+   * JWKS endpoint for signature verification. Typically `${issuer}jwks/` for
+   * Authentik. Auto-derived from `issuer` if omitted.
+   */
+  jwksUri?: string;
+  /** Scopes advertised in the resource metadata document. */
+  scopesSupported?: string[];
+}
+
+export interface StartMcpOptions {
+  name: string;
+  version?: string;
+  port: number;
+  /** Static bearer token — internal callers (bot, Claude Code) use this. */
+  bearerToken: string;
+  /** Tools registered with the MCP server. */
+  tools: ToolRegistration[];
+  /** Optional custom backend-error formatter. */
   onBackendError?: (e: unknown) => string | null;
+  /** Enable OAuth 2.1 JWT validation alongside static bearer. */
+  oauth?: OAuthOptions;
+}
+
+function json(res: ServerResponse, status: number, body: any, headers: Record<string, string> = {}) {
+  res.writeHead(status, { "Content-Type": "application/json", ...headers });
+  res.end(JSON.stringify(body));
 }
 
 export async function startMcp(opts: StartMcpOptions): Promise<void> {
-  const { name, version = "0.1.0", port, bearerToken, tools, onBackendError } = opts;
+  const { name, version = "0.1.0", port, bearerToken, tools, onBackendError, oauth } = opts;
 
   if (!bearerToken) throw new Error(`startMcp: bearerToken required for '${name}'`);
 
   const toolsByName: Record<string, ToolRegistration> = {};
   for (const t of tools) toolsByName[t.def.name] = t;
 
-  const transports = new Map<string, SSEServerTransport>();
+  // ----- OAuth / JWT setup (if enabled) -----
+  let jwks: JWTVerifyGetKey | null = null;
+  let protectedResourceMetadata: Record<string, any> | null = null;
+  let resourceMetadataPath = "";
+
+  if (oauth) {
+    const jwksUri = oauth.jwksUri ?? new URL("jwks/", oauth.issuer).toString();
+    jwks = createRemoteJWKSet(new URL(jwksUri), {
+      cacheMaxAge: 10 * 60 * 1000, // 10 min
+      cooldownDuration: 30 * 1000, // 30s between fetches on failure
+    });
+
+    protectedResourceMetadata = {
+      resource: oauth.canonicalUrl,
+      authorization_servers: [oauth.issuer],
+      bearer_methods_supported: ["header"],
+      scopes_supported: oauth.scopesSupported ?? [],
+      resource_documentation: `${oauth.canonicalUrl}/health`,
+    };
+
+    resourceMetadataPath = "/.well-known/oauth-protected-resource";
+  }
+
+  async function authenticate(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+    const auth = req.headers.authorization;
+    if (!auth || !auth.toLowerCase().startsWith("bearer ")) {
+      unauthorized(res, "missing_token");
+      return false;
+    }
+    const token = auth.slice("bearer ".length).trim();
+
+    // Static bearer first (fast path, bot + CLI).
+    if (token === bearerToken) return true;
+
+    // Fall through to OAuth JWT if enabled.
+    if (oauth && jwks) {
+      try {
+        await jwtVerify(token, jwks, {
+          issuer: oauth.issuer,
+          audience: oauth.canonicalUrl,
+        });
+        return true;
+      } catch {
+        // intentional: no detail leak
+      }
+    }
+
+    unauthorized(res, "invalid_token");
+    return false;
+  }
+
+  function unauthorized(res: ServerResponse, err: string) {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (oauth) {
+      const resourceMetadataUrl = `${oauth.canonicalUrl}${resourceMetadataPath}`;
+      headers["WWW-Authenticate"] = `Bearer error="${err}", resource_metadata="${resourceMetadataUrl}"`;
+    } else {
+      headers["WWW-Authenticate"] = `Bearer error="${err}"`;
+    }
+    res.writeHead(401, headers);
+    res.end(
+      JSON.stringify({
+        error: err === "missing_token" ? "authorization required" : "invalid token",
+      }),
+    );
+  }
 
   const buildServer = (): Server => {
     const server = new Server({ name, version }, { capabilities: { tools: {} } });
@@ -74,9 +177,8 @@ export async function startMcp(opts: StartMcpOptions): Promise<void> {
     server.setRequestHandler(CallToolRequestSchema, async (req) => {
       const { name: toolName, arguments: args } = req.params;
       const reg = toolsByName[toolName];
-      if (!reg) {
-        return { isError: true, content: [{ type: "text", text: `unknown tool: ${toolName}` }] };
-      }
+      if (!reg) return { isError: true, content: [{ type: "text", text: `unknown tool: ${toolName}` }] };
+
       const parsed = reg.def.inputSchema.safeParse(args);
       if (!parsed.success) {
         return {
@@ -104,53 +206,83 @@ export async function startMcp(opts: StartMcpOptions): Promise<void> {
     return server;
   };
 
+  const sseTransports = new Map<string, SSEServerTransport>();
+  const streamableTransports = new Map<string, StreamableHTTPServerTransport>();
+
   const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url || "/", `http://localhost:${port}`);
 
     if (url.pathname === "/health" && req.method === "GET") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true, service: name, tools: tools.map((t) => t.def.name) }));
-      return;
+      return json(res, 200, { ok: true, service: name, tools: tools.map((t) => t.def.name) });
+    }
+    if (oauth && url.pathname === resourceMetadataPath && req.method === "GET") {
+      return json(res, 200, protectedResourceMetadata);
     }
 
-    const auth = req.headers.authorization;
-    if (!auth || auth !== `Bearer ${bearerToken}`) {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Authorization: Bearer <MCP_BEARER_TOKEN> required" }));
-      return;
+    if (!(await authenticate(req, res))) return;
+
+    // ----- Streamable HTTP (/mcp) — modern MCP transport (ChatGPT, Claude.ai) -----
+    if (url.pathname === "/mcp") {
+      const sessionHeader = req.headers["mcp-session-id"];
+      const sessionId = Array.isArray(sessionHeader) ? sessionHeader[0] : sessionHeader;
+
+      if (sessionId && streamableTransports.has(sessionId)) {
+        await streamableTransports.get(sessionId)!.handleRequest(req, res);
+        return;
+      }
+
+      if (req.method === "POST") {
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (newSessionId) => {
+            streamableTransports.set(newSessionId, transport);
+          },
+        });
+        transport.onclose = () => {
+          if (transport.sessionId) streamableTransports.delete(transport.sessionId);
+        };
+        const server = buildServer();
+        await server.connect(transport);
+        await transport.handleRequest(req, res);
+        return;
+      }
+
+      return json(res, 400, { error: "invalid /mcp request — initialise via POST" });
     }
 
+    // ----- Legacy SSE (/sse + /message) — kept for bot -----
     if (url.pathname === "/sse" && req.method === "GET") {
       const transport = new SSEServerTransport("/message", res);
-      transports.set(transport.sessionId, transport);
-      req.on("close", () => transports.delete(transport.sessionId));
+      sseTransports.set(transport.sessionId, transport);
+      req.on("close", () => sseTransports.delete(transport.sessionId));
       const server = buildServer();
       await server.connect(transport);
       return;
     }
-
     if (url.pathname === "/message" && req.method === "POST") {
       const sid = url.searchParams.get("sessionId");
-      const transport = sid ? transports.get(sid) : undefined;
-      if (!transport) {
-        res.writeHead(404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "unknown sessionId" }));
-        return;
-      }
+      const transport = sid ? sseTransports.get(sid) : undefined;
+      if (!transport) return json(res, 404, { error: "unknown sessionId" });
       await transport.handlePostMessage(req, res);
       return;
     }
 
-    res.writeHead(404);
-    res.end("not found");
+    json(res, 404, { error: "not found" });
   });
 
   await new Promise<void>((resolve) => {
     httpServer.listen(port, "0.0.0.0", () => {
       console.log(`${name} listening on 0.0.0.0:${port}`);
-      console.log(`  tools: ${tools.map((t) => t.def.name).join(", ")}`);
-      console.log(`  health: GET /health (public)`);
-      console.log(`  mcp:    GET /sse + POST /message (Bearer auth)`);
+      console.log(`  tools:    ${tools.map((t) => t.def.name).join(", ")}`);
+      console.log(`  health:   GET /health (public)`);
+      console.log(`  mcp:      POST /mcp (streamable HTTP, Bearer)`);
+      console.log(`  legacy:   GET /sse + POST /message (bearer)`);
+      if (oauth) {
+        console.log(`  oauth:    issuer ${oauth.issuer}`);
+        console.log(`  prm:      GET ${resourceMetadataPath} (public)`);
+      } else {
+        console.log(`  oauth:    disabled (static bearer only)`);
+      }
       resolve();
     });
   });

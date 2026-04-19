@@ -14,4 +14,4 @@
 export { fetchSecret } from "./infisical.js";
 export { zodToJsonSchema, isDefaulted } from "./schema.js";
 export { startMcp } from "./transport.js";
-export type { ToolDefinition, ToolRegistration, StartMcpOptions } from "./transport.js";
+export type { ToolDefinition, ToolRegistration, StartMcpOptions, OAuthOptions } from "./transport.js";
