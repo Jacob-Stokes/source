@@ -55,21 +55,20 @@ export function renderDashboard() {
   .claude-loading { color: #71717a; font-size: 14px; }
   .claude-error { color: #ef4444; font-size: 13px; }
 
-  .usage-history {
-    background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 24px;
-    margin-bottom: 24px;
+  .usage-history-inner {
+    margin-top: 20px; padding-top: 16px; border-top: 1px solid #27272a;
   }
-  .usage-history h2 { font-size: 16px; font-weight: 600; margin-bottom: 4px; letter-spacing: -0.01em; }
-  .usage-history .sub-type { font-size: 13px; color: #a1a1aa; margin-bottom: 16px; }
-  .usage-history-controls { display: flex; gap: 8px; margin-bottom: 16px; }
+  .usage-history-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; flex-wrap: wrap; }
+  .usage-history-title { font-size: 13px; font-weight: 500; color: #d4d4d8; }
+  .usage-history-controls { display: flex; gap: 6px; flex-wrap: wrap; }
   .usage-history-controls button {
     background: #27272a; color: #d4d4d8; border: 1px solid #3f3f46; border-radius: 6px;
-    padding: 4px 10px; font-size: 12px; cursor: pointer;
+    padding: 3px 8px; font-size: 11px; cursor: pointer;
   }
   .usage-history-controls button.active { background: #3f3f46; color: #fafafa; border-color: #52525b; }
-  .usage-history svg { width: 100%; height: 180px; display: block; }
-  .usage-history-legend { display: flex; gap: 16px; font-size: 12px; color: #a1a1aa; margin-top: 8px; flex-wrap: wrap; }
-  .usage-history-legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .usage-history-inner svg { width: 100%; height: 160px; display: block; }
+  .usage-history-legend { display: flex; gap: 12px; font-size: 11px; color: #a1a1aa; margin-top: 8px; flex-wrap: wrap; }
+  .usage-history-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
 
   @media (max-width: 600px) {
     .claude-bars { grid-template-columns: 1fr; }
@@ -184,30 +183,30 @@ export function renderDashboard() {
       <h2>Claude Subscription</h2>
       <div class="sub-type" id="claude-sub-type"></div>
       <div id="claude-content"><div class="claude-loading">Loading usage data...</div></div>
+      <div class="usage-history-inner">
+        <div class="usage-history-header">
+          <div class="usage-history-title">History</div>
+          <div class="usage-history-controls">
+            <button data-hours="3">3h</button>
+            <button data-hours="12">12h</button>
+            <button data-hours="24" class="active">24h</button>
+            <button data-hours="72">72h</button>
+            <button data-hours="168">7d</button>
+          </div>
+        </div>
+        <div id="usage-history-content"><div class="claude-loading">Loading history...</div></div>
+        <div class="usage-history-legend">
+          <span><span class="dot" style="background:#60a5fa"></span>5h</span>
+          <span><span class="dot" style="background:#a78bfa"></span>7d</span>
+          <span><span class="dot" style="background:#f59e0b"></span>Opus</span>
+          <span><span class="dot" style="background:#34d399"></span>Sonnet</span>
+        </div>
+      </div>
     </div>
     <div class="claude-section" id="codex-section" style="margin-bottom: 0;">
       <h2>Codex Subscription</h2>
       <div class="sub-type" id="codex-sub-type"></div>
       <div id="codex-content"><div class="claude-loading">Loading usage data...</div></div>
-    </div>
-  </div>
-
-  <div class="usage-history">
-    <h2>Claude Usage History</h2>
-    <div class="sub-type">Per-window utilization captured every 60s</div>
-    <div class="usage-history-controls">
-      <button data-hours="3">3h</button>
-      <button data-hours="12">12h</button>
-      <button data-hours="24" class="active">24h</button>
-      <button data-hours="72">72h</button>
-      <button data-hours="168">7d</button>
-    </div>
-    <div id="usage-history-content"><div class="claude-loading">Loading history...</div></div>
-    <div class="usage-history-legend">
-      <span><span class="dot" style="background:#60a5fa"></span>5h window</span>
-      <span><span class="dot" style="background:#a78bfa"></span>7d window</span>
-      <span><span class="dot" style="background:#f59e0b"></span>7d Opus</span>
-      <span><span class="dot" style="background:#34d399"></span>7d Sonnet</span>
     </div>
   </div>
 
