@@ -78,6 +78,13 @@ export function getLatestClaudeSnapshot() {
   return db.prepare(`SELECT * FROM claude_usage_snapshots ORDER BY id DESC LIMIT 1`).get();
 }
 
+export function getLatestClaudeRaw() {
+  const db = getDb();
+  const row = db.prepare(`SELECT raw, timestamp FROM claude_usage_snapshots WHERE raw IS NOT NULL ORDER BY id DESC LIMIT 1`).get();
+  if (!row) return null;
+  try { return { ...JSON.parse(row.raw), _snapshot_at: row.timestamp }; } catch { return null; }
+}
+
 export function insertRun(data) {
   const db = getDb();
   return db.prepare(`INSERT INTO runs (agent, model, cost_usd, input_tokens, output_tokens, cache_read, cache_creation, duration_ms, usage_5h_before, usage_5h_after, usage_7d_before, usage_7d_after) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(

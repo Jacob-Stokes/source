@@ -1,7 +1,7 @@
 import express from 'express';
 import fs from 'fs';
 import crypto from 'crypto';
-import { insertRun, getRuns, getStats, getTimeseries, getFilterOptions, getAgentStats, getDb, insertClaudeSnapshot, getClaudeSnapshots } from './db.js';
+import { insertRun, getRuns, getStats, getTimeseries, getFilterOptions, getAgentStats, getDb, insertClaudeSnapshot, getClaudeSnapshots, getLatestClaudeRaw } from './db.js';
 import { renderDashboard } from './dashboard.js';
 import { renderAgentDashboard } from './agents-dashboard.js';
 import { renderScheduleDashboard } from './schedule-dashboard.js';
@@ -223,6 +223,12 @@ app.get('/api/rates', requireApiKeyOrBasicAuth, async (req, res) => {
   res.json(exchangeRates);
 });
 app.get('/api/claude-usage', requireApiKeyOrBasicAuth, async (req, res) => {
+  // Serve from the latest snapshot (written by the background poller) so the
+  // dashboard never directly hits Anthropic. force=true falls back to live fetch.
+  if (req.query.force !== 'true') {
+    const snap = getLatestClaudeRaw();
+    if (snap) return res.json(snap);
+  }
   if (req.query.force === 'true') {
     claudeUsageCache = null;
     claudeUsageCacheTime = 0;
@@ -328,9 +334,12 @@ app.post('/api/log', requireApiKey, (req, res) => {
   } catch(e) { res.status(400).json({ error: e.message }); }
 });
 
-const USAGE_POLL_MS = parseInt(process.env.USAGE_POLL_MS) || 60000;
+const USAGE_POLL_MS = parseInt(process.env.USAGE_POLL_MS) || 300000;
+
+let pollBackoffUntil = 0;
 
 async function pollClaudeUsage() {
+  if (Date.now() < pollBackoffUntil) return;
   try {
     const creds = JSON.parse(fs.readFileSync('/data/claude-credentials.json', 'utf8'));
     const token = creds.claudeAiOauth.accessToken;
@@ -340,6 +349,11 @@ async function pollClaudeUsage() {
         'anthropic-beta': 'oauth-2025-04-20',
       }
     });
+    if (res.status === 429) {
+      pollBackoffUntil = Date.now() + 30 * 60 * 1000; // 30 min cool-off
+      console.warn('[usage-poll] Claude 429 rate-limited, backing off 30 min');
+      return;
+    }
     if (!res.ok) {
       console.error(`[usage-poll] Claude ${res.status}`);
       return;

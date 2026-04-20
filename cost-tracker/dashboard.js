@@ -527,7 +527,7 @@ async function loadUsageHistory() {
   try {
     const rows = await fetch('/api/claude-usage/snapshots?hours=' + usageHistoryHours).then(r => r.json());
     if (!Array.isArray(rows) || rows.length === 0) {
-      container.innerHTML = '<div class="claude-loading">No snapshots yet — poller writes every 60s.</div>';
+      container.innerHTML = '<div class="claude-loading">No snapshots yet — poller writes every 5 min.</div>';
       return;
     }
     container.innerHTML = renderUsageHistorySvg(rows);
@@ -633,9 +633,6 @@ function renderUsageHistorySvg(rows) {
       const d = smoothPath(seg);
       if (d) {
         svg += '<path d="' + d + '" fill="none" stroke="' + s.color + '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />';
-      }
-      for (const p of seg) {
-        svg += '<circle cx="' + p.x + '" cy="' + p.y + '" r="1" fill="' + s.color + '" />';
       }
     }
   }
