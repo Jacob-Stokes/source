@@ -1,7 +1,7 @@
 import express from 'express';
 import fs from 'fs';
 import crypto from 'crypto';
-import { insertRun, getRuns, getStats, getTimeseries, getFilterOptions, getAgentStats, getDb, insertClaudeSnapshot, getClaudeSnapshots, getLatestClaudeRaw } from './db.js';
+import { insertRun, getRuns, getStats, getTimeseries, getFilterOptions, getAgentStats, getDb, insertClaudeSnapshot, getClaudeSnapshots, getLatestClaudeRaw, insertCodexSnapshot, getCodexSnapshots, getLatestCodexRaw } from './db.js';
 import { renderDashboard } from './dashboard.js';
 import { renderAgentDashboard } from './agents-dashboard.js';
 import { renderScheduleDashboard } from './schedule-dashboard.js';
@@ -245,6 +245,10 @@ app.get('/api/claude-usage/snapshots', requireApiKeyOrBasicAuth, (req, res) => {
 });
 
 app.get('/api/codex-usage', requireApiKeyOrBasicAuth, async (req, res) => {
+  if (req.query.force !== 'true') {
+    const snap = getLatestCodexRaw();
+    if (snap) return res.json(snap);
+  }
   if (req.query.force === 'true') {
     codexUsageCache = null;
     codexUsageCacheTime = 0;
@@ -252,6 +256,12 @@ app.get('/api/codex-usage', requireApiKeyOrBasicAuth, async (req, res) => {
   const usage = await fetchCodexUsage();
   if (usage) res.json(usage);
   else res.status(503).json({ error: 'Could not fetch Codex usage' });
+});
+
+app.get('/api/codex-usage/snapshots', requireApiKeyOrBasicAuth, (req, res) => {
+  const hours = parseInt(req.query.hours) || 24;
+  const since = new Date(Date.now() - hours * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  res.json(getCodexSnapshots({ since, limit: 10000 }));
 });
 
 // Agent runner - proxy to Windmill
@@ -376,6 +386,63 @@ async function pollClaudeUsage() {
 
 setInterval(pollClaudeUsage, USAGE_POLL_MS);
 pollClaudeUsage();
+
+let codexPollBackoffUntil = 0;
+
+async function pollCodexUsage() {
+  if (Date.now() < codexPollBackoffUntil) return;
+  try {
+    let auth = JSON.parse(fs.readFileSync(CODEX_AUTH_FILE, 'utf8'));
+    let token = auth.tokens.access_token;
+    const accountId = auth.tokens.account_id || '';
+    const headers = {
+      'Authorization': 'Bearer ' + token,
+      'User-Agent': 'Mozilla/5.0',
+      'Accept': 'application/json',
+    };
+    if (accountId) headers['ChatGPT-Account-Id'] = accountId;
+
+    let res = await fetch('https://chatgpt.com/backend-api/wham/usage', { headers });
+    if (res.status === 401 || res.status === 403) {
+      const newToken = await refreshCodexToken();
+      if (newToken) {
+        headers['Authorization'] = 'Bearer ' + newToken;
+        res = await fetch('https://chatgpt.com/backend-api/wham/usage', { headers });
+      }
+    }
+    if (res.status === 429) {
+      codexPollBackoffUntil = Date.now() + 30 * 60 * 1000;
+      console.warn('[usage-poll] Codex 429 rate-limited, backing off 30 min');
+      return;
+    }
+    if (!res.ok) {
+      console.error(`[usage-poll] Codex ${res.status}`);
+      return;
+    }
+    const data = await res.json();
+    const rl = data.rate_limit || {};
+    const primary = rl.primary_window || null;
+    const secondary = rl.secondary_window || null;
+    const cr = data.code_review_rate_limit?.primary_window || null;
+    insertCodexSnapshot({
+      primary_util: primary?.used_percent ?? null,
+      primary_window_hours: primary ? Math.round(primary.limit_window_seconds / 3600) : null,
+      primary_reset_after_seconds: primary?.reset_after_seconds ?? null,
+      secondary_util: secondary?.used_percent ?? null,
+      secondary_window_hours: secondary ? Math.round(secondary.limit_window_seconds / 3600) : null,
+      secondary_reset_after_seconds: secondary?.reset_after_seconds ?? null,
+      code_review_util: cr?.used_percent ?? null,
+      credits_balance: data.credits?.balance ?? null,
+      plan_type: data.plan_type ?? null,
+      raw: JSON.stringify(data),
+    });
+  } catch(e) {
+    console.error('[usage-poll] Codex error:', e.message);
+  }
+}
+
+setInterval(pollCodexUsage, USAGE_POLL_MS);
+pollCodexUsage();
 
 app.listen(PORT, () => {
   console.log('Cost tracker running on port ' + PORT);

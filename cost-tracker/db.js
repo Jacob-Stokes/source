@@ -43,6 +43,22 @@ export function getDb() {
       raw TEXT
     )`);
     db.exec('CREATE INDEX IF NOT EXISTS idx_claude_snap_timestamp ON claude_usage_snapshots(timestamp)');
+
+    db.exec(`CREATE TABLE IF NOT EXISTS codex_usage_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT DEFAULT (datetime('now')),
+      primary_util REAL,
+      primary_window_hours INTEGER,
+      primary_reset_after_seconds INTEGER,
+      secondary_util REAL,
+      secondary_window_hours INTEGER,
+      secondary_reset_after_seconds INTEGER,
+      code_review_util REAL,
+      credits_balance REAL,
+      plan_type TEXT,
+      raw TEXT
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_codex_snap_timestamp ON codex_usage_snapshots(timestamp)');
   }
   return db;
 }
@@ -81,6 +97,43 @@ export function getLatestClaudeSnapshot() {
 export function getLatestClaudeRaw() {
   const db = getDb();
   const row = db.prepare(`SELECT raw, timestamp FROM claude_usage_snapshots WHERE raw IS NOT NULL ORDER BY id DESC LIMIT 1`).get();
+  if (!row) return null;
+  try { return { ...JSON.parse(row.raw), _snapshot_at: row.timestamp }; } catch { return null; }
+}
+
+export function insertCodexSnapshot(data) {
+  const db = getDb();
+  return db.prepare(`INSERT INTO codex_usage_snapshots
+    (primary_util, primary_window_hours, primary_reset_after_seconds,
+     secondary_util, secondary_window_hours, secondary_reset_after_seconds,
+     code_review_util, credits_balance, plan_type, raw)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    data.primary_util ?? null,
+    data.primary_window_hours ?? null,
+    data.primary_reset_after_seconds ?? null,
+    data.secondary_util ?? null,
+    data.secondary_window_hours ?? null,
+    data.secondary_reset_after_seconds ?? null,
+    data.code_review_util ?? null,
+    data.credits_balance ?? null,
+    data.plan_type ?? null,
+    data.raw ?? null
+  );
+}
+
+export function getCodexSnapshots({ since, until, limit = 1440 } = {}) {
+  const db = getDb();
+  let where = '1=1';
+  const params = [];
+  if (since) { where += ' AND timestamp >= ?'; params.push(since); }
+  if (until) { where += ' AND timestamp <= ?'; params.push(until); }
+  return db.prepare(`SELECT timestamp, primary_util, secondary_util, code_review_util, credits_balance, plan_type
+    FROM codex_usage_snapshots WHERE ${where} ORDER BY timestamp ASC LIMIT ?`).all(...params, limit);
+}
+
+export function getLatestCodexRaw() {
+  const db = getDb();
+  const row = db.prepare(`SELECT raw, timestamp FROM codex_usage_snapshots WHERE raw IS NOT NULL ORDER BY id DESC LIMIT 1`).get();
   if (!row) return null;
   try { return { ...JSON.parse(row.raw), _snapshot_at: row.timestamp }; } catch { return null; }
 }

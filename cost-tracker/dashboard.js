@@ -208,6 +208,25 @@ export function renderDashboard() {
       <h2>Codex Subscription</h2>
       <div class="sub-type" id="codex-sub-type"></div>
       <div id="codex-content"><div class="claude-loading">Loading usage data...</div></div>
+      <div class="usage-history-inner">
+        <div class="usage-history-header">
+          <div class="usage-history-title">History</div>
+          <div class="usage-history-controls" id="codex-history-controls">
+            <button data-hours="1" class="active">1h</button>
+            <button data-hours="3">3h</button>
+            <button data-hours="12">12h</button>
+            <button data-hours="24">24h</button>
+            <button data-hours="72">72h</button>
+            <button data-hours="168">7d</button>
+          </div>
+        </div>
+        <div id="codex-history-content"><div class="claude-loading">Loading history...</div></div>
+        <div class="usage-history-legend">
+          <span><span class="dot" style="background:#60a5fa"></span>Primary</span>
+          <span><span class="dot" style="background:#a78bfa"></span>Secondary</span>
+          <span><span class="dot" style="background:#f59e0b"></span>Code Review</span>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -519,35 +538,54 @@ async function loadCodexUsage() {
   }
 }
 
-let usageHistoryHours = 1;
+let claudeHistoryHours = 1;
+let codexHistoryHours = 1;
 
-async function loadUsageHistory() {
+async function loadClaudeHistory() {
   const container = document.getElementById('usage-history-content');
   if (!container) return;
   try {
-    const rows = await fetch('/api/claude-usage/snapshots?hours=' + usageHistoryHours).then(r => r.json());
+    const rows = await fetch('/api/claude-usage/snapshots?hours=' + claudeHistoryHours).then(r => r.json());
     if (!Array.isArray(rows) || rows.length === 0) {
       container.innerHTML = '<div class="claude-loading">No snapshots yet — poller writes every 5 min.</div>';
       return;
     }
-    container.innerHTML = renderUsageHistorySvg(rows);
+    container.innerHTML = renderUsageHistorySvg(rows, [
+      { key: 'five_hour_util', color: '#60a5fa' },
+      { key: 'seven_day_util', color: '#a78bfa' },
+      { key: 'seven_day_opus_util', color: '#f59e0b' },
+      { key: 'seven_day_sonnet_util', color: '#34d399' },
+    ], claudeHistoryHours);
   } catch (e) {
     container.innerHTML = '<div class="claude-error">Failed to load: ' + e.message + '</div>';
   }
 }
 
-function renderUsageHistorySvg(rows) {
+async function loadCodexHistory() {
+  const container = document.getElementById('codex-history-content');
+  if (!container) return;
+  try {
+    const rows = await fetch('/api/codex-usage/snapshots?hours=' + codexHistoryHours).then(r => r.json());
+    if (!Array.isArray(rows) || rows.length === 0) {
+      container.innerHTML = '<div class="claude-loading">No snapshots yet — poller writes every 5 min.</div>';
+      return;
+    }
+    container.innerHTML = renderUsageHistorySvg(rows, [
+      { key: 'primary_util', color: '#60a5fa' },
+      { key: 'secondary_util', color: '#a78bfa' },
+      { key: 'code_review_util', color: '#f59e0b' },
+    ], codexHistoryHours);
+  } catch (e) {
+    container.innerHTML = '<div class="claude-error">Failed to load: ' + e.message + '</div>';
+  }
+}
+
+function renderUsageHistorySvg(rows, series, hours) {
   const W = 800, H = 180, pad = { l: 32, r: 12, t: 12, b: 24 };
   const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
-  const series = [
-    { key: 'five_hour_util', color: '#60a5fa' },
-    { key: 'seven_day_util', color: '#a78bfa' },
-    { key: 'seven_day_opus_util', color: '#f59e0b' },
-    { key: 'seven_day_sonnet_util', color: '#34d399' },
-  ];
   const times = rows.map(r => new Date(r.timestamp.replace(' ', 'T') + 'Z').getTime());
   const tMax = Date.now();
-  const tMin = tMax - usageHistoryHours * 3600 * 1000;
+  const tMin = tMax - hours * 3600 * 1000;
   const span = Math.max(1, tMax - tMin);
   const x = t => pad.l + ((t - tMin) / span) * plotW;
   const y = v => pad.t + plotH - (Math.min(100, Math.max(0, v)) / 100) * plotH;
@@ -562,7 +600,7 @@ function renderUsageHistorySvg(rows) {
   // Time axis labels (first / middle / last) — spans the full selected window
   const fmtTime = ms => {
     const d = new Date(ms);
-    if (usageHistoryHours >= 48) return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    if (hours >= 48) return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
   for (const frac of [0, 0.5, 1]) {
@@ -790,16 +828,23 @@ async function load() {
   renderData();
   loadClaudeUsage();
   loadCodexUsage();
-  loadUsageHistory();
+  loadClaudeHistory();
+  loadCodexHistory();
 
-  document.querySelectorAll('.usage-history-controls button').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.usage-history-controls button').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      usageHistoryHours = parseInt(btn.dataset.hours);
-      loadUsageHistory();
+  function bindHistoryButtons(selector, setHours, reload) {
+    const group = document.querySelector(selector);
+    if (!group) return;
+    group.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        group.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        setHours(parseInt(btn.dataset.hours));
+        reload();
+      });
     });
-  });
+  }
+  bindHistoryButtons('#claude-section .usage-history-controls', h => { claudeHistoryHours = h; }, loadClaudeHistory);
+  bindHistoryButtons('#codex-history-controls', h => { codexHistoryHours = h; }, loadCodexHistory);
 
   // Populate filter dropdowns
   try {
@@ -860,7 +905,8 @@ async function refresh() {
     renderData();
     loadClaudeUsage();
     loadCodexUsage();
-    loadUsageHistory();
+    loadClaudeHistory();
+    loadCodexHistory();
   } catch (e) { console.warn('Refresh failed', e); }
 }
 setInterval(refresh, 30000);
