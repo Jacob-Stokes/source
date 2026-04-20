@@ -545,7 +545,8 @@ function renderUsageHistorySvg(rows) {
     { key: 'seven_day_sonnet_util', color: '#34d399' },
   ];
   const times = rows.map(r => new Date(r.timestamp.replace(' ', 'T') + 'Z').getTime());
-  const tMin = times[0], tMax = times[times.length - 1];
+  const tMax = Date.now();
+  const tMin = tMax - usageHistoryHours * 3600 * 1000;
   const span = Math.max(1, tMax - tMin);
   const x = t => pad.l + ((t - tMin) / span) * plotW;
   const y = v => pad.t + plotH - (Math.min(100, Math.max(0, v)) / 100) * plotH;
@@ -557,7 +558,7 @@ function renderUsageHistorySvg(rows) {
     svg += '<line x1="' + pad.l + '" x2="' + (W - pad.r) + '" y1="' + gy + '" y2="' + gy + '" stroke="#27272a" stroke-width="1" />';
     svg += '<text x="' + (pad.l - 6) + '" y="' + (gy + 3) + '" fill="#71717a" font-size="10" text-anchor="end">' + g + '%</text>';
   }
-  // Time axis labels (first / middle / last)
+  // Time axis labels (first / middle / last) — spans the full selected window
   const fmtTime = ms => {
     const d = new Date(ms);
     if (usageHistoryHours >= 48) return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
@@ -568,19 +569,49 @@ function renderUsageHistorySvg(rows) {
     const tx = x(t);
     svg += '<text x="' + tx + '" y="' + (H - 6) + '" fill="#71717a" font-size="10" text-anchor="middle">' + fmtTime(t) + '</text>';
   }
-  // Series
+
+  // Catmull-Rom through points -> cubic Bezier 'd' string
+  function smoothPath(pts) {
+    if (pts.length === 0) return '';
+    if (pts.length === 1) return ''; // single point — rendered as circle only
+    let d = 'M' + pts[0].x + ',' + pts[0].y;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] || pts[i];
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      const p3 = pts[i + 2] || p2;
+      const c1x = p1.x + (p2.x - p0.x) / 6;
+      const c1y = p1.y + (p2.y - p0.y) / 6;
+      const c2x = p2.x - (p3.x - p1.x) / 6;
+      const c2y = p2.y - (p3.y - p1.y) / 6;
+      d += ' C' + c1x + ',' + c1y + ' ' + c2x + ',' + c2y + ' ' + p2.x + ',' + p2.y;
+    }
+    return d;
+  }
+
+  // Series — draw smooth curve + points
   for (const s of series) {
-    let d = '';
-    let started = false;
+    // Collect non-null points, splitting into contiguous segments on gaps
+    const segments = [];
+    let current = [];
     rows.forEach((r, i) => {
       const v = r[s.key];
-      if (v == null) { started = false; return; }
-      const cmd = started ? 'L' : 'M';
-      d += cmd + x(times[i]) + ',' + y(v) + ' ';
-      started = true;
+      if (v == null) {
+        if (current.length) { segments.push(current); current = []; }
+        return;
+      }
+      current.push({ x: x(times[i]), y: y(v) });
     });
-    if (d) {
-      svg += '<path d="' + d + '" fill="none" stroke="' + s.color + '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />';
+    if (current.length) segments.push(current);
+
+    for (const seg of segments) {
+      const d = smoothPath(seg);
+      if (d) {
+        svg += '<path d="' + d + '" fill="none" stroke="' + s.color + '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />';
+      }
+      for (const p of seg) {
+        svg += '<circle cx="' + p.x + '" cy="' + p.y + '" r="2.5" fill="' + s.color + '" />';
+      }
     }
   }
   svg += '</svg>';
