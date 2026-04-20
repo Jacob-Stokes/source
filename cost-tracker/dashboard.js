@@ -187,9 +187,10 @@ export function renderDashboard() {
         <div class="usage-history-header">
           <div class="usage-history-title">History</div>
           <div class="usage-history-controls">
+            <button data-hours="1" class="active">1h</button>
             <button data-hours="3">3h</button>
             <button data-hours="12">12h</button>
-            <button data-hours="24" class="active">24h</button>
+            <button data-hours="24">24h</button>
             <button data-hours="72">72h</button>
             <button data-hours="168">7d</button>
           </div>
@@ -518,7 +519,7 @@ async function loadCodexUsage() {
   }
 }
 
-let usageHistoryHours = 24;
+let usageHistoryHours = 1;
 
 async function loadUsageHistory() {
   const container = document.getElementById('usage-history-content');
@@ -570,26 +571,50 @@ function renderUsageHistorySvg(rows) {
     svg += '<text x="' + tx + '" y="' + (H - 6) + '" fill="#71717a" font-size="10" text-anchor="middle">' + fmtTime(t) + '</text>';
   }
 
-  // Catmull-Rom through points -> cubic Bezier 'd' string
+  // Monotone cubic Hermite interpolation -> cubic Bezier 'd' string.
+  // Preserves monotonicity (no overshoot), looks smooth across the whole set.
   function smoothPath(pts) {
-    if (pts.length === 0) return '';
-    if (pts.length === 1) return ''; // single point — rendered as circle only
+    const n = pts.length;
+    if (n === 0) return '';
+    if (n === 1) return '';
+    if (n === 2) return 'M' + pts[0].x + ',' + pts[0].y + ' L' + pts[1].x + ',' + pts[1].y;
+
+    const dx = new Array(n - 1), dy = new Array(n - 1), m = new Array(n - 1);
+    for (let i = 0; i < n - 1; i++) {
+      dx[i] = pts[i + 1].x - pts[i].x;
+      dy[i] = pts[i + 1].y - pts[i].y;
+      m[i] = dx[i] === 0 ? 0 : dy[i] / dx[i];
+    }
+    const tan = new Array(n);
+    tan[0] = m[0];
+    tan[n - 1] = m[n - 2];
+    for (let i = 1; i < n - 1; i++) {
+      if (m[i - 1] * m[i] <= 0) tan[i] = 0;
+      else tan[i] = (m[i - 1] + m[i]) / 2;
+    }
+    // Fritsch–Carlson monotonicity fix
+    for (let i = 0; i < n - 1; i++) {
+      if (m[i] === 0) { tan[i] = 0; tan[i + 1] = 0; continue; }
+      const a = tan[i] / m[i], b = tan[i + 1] / m[i];
+      const h = a * a + b * b;
+      if (h > 9) {
+        const t = 3 / Math.sqrt(h);
+        tan[i] = t * a * m[i];
+        tan[i + 1] = t * b * m[i];
+      }
+    }
     let d = 'M' + pts[0].x + ',' + pts[0].y;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const p0 = pts[i - 1] || pts[i];
-      const p1 = pts[i];
-      const p2 = pts[i + 1];
-      const p3 = pts[i + 2] || p2;
-      const c1x = p1.x + (p2.x - p0.x) / 6;
-      const c1y = p1.y + (p2.y - p0.y) / 6;
-      const c2x = p2.x - (p3.x - p1.x) / 6;
-      const c2y = p2.y - (p3.y - p1.y) / 6;
-      d += ' C' + c1x + ',' + c1y + ' ' + c2x + ',' + c2y + ' ' + p2.x + ',' + p2.y;
+    for (let i = 0; i < n - 1; i++) {
+      const c1x = pts[i].x + dx[i] / 3;
+      const c1y = pts[i].y + tan[i] * dx[i] / 3;
+      const c2x = pts[i + 1].x - dx[i] / 3;
+      const c2y = pts[i + 1].y - tan[i + 1] * dx[i] / 3;
+      d += ' C' + c1x + ',' + c1y + ' ' + c2x + ',' + c2y + ' ' + pts[i + 1].x + ',' + pts[i + 1].y;
     }
     return d;
   }
 
-  // Series — draw smooth curve + points
+  // Series — draw smooth curve + small points
   for (const s of series) {
     // Collect non-null points, splitting into contiguous segments on gaps
     const segments = [];
@@ -610,7 +635,7 @@ function renderUsageHistorySvg(rows) {
         svg += '<path d="' + d + '" fill="none" stroke="' + s.color + '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />';
       }
       for (const p of seg) {
-        svg += '<circle cx="' + p.x + '" cy="' + p.y + '" r="2.5" fill="' + s.color + '" />';
+        svg += '<circle cx="' + p.x + '" cy="' + p.y + '" r="1" fill="' + s.color + '" />';
       }
     }
   }
