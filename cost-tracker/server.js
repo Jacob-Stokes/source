@@ -1,7 +1,7 @@
 import express from 'express';
 import fs from 'fs';
 import crypto from 'crypto';
-import { insertRun, getRuns, getStats, getTimeseries, getFilterOptions, getAgentStats, getDb } from './db.js';
+import { insertRun, getRuns, getStats, getTimeseries, getFilterOptions, getAgentStats, getDb, insertClaudeSnapshot, getClaudeSnapshots } from './db.js';
 import { renderDashboard } from './dashboard.js';
 import { renderAgentDashboard } from './agents-dashboard.js';
 import { renderScheduleDashboard } from './schedule-dashboard.js';
@@ -232,6 +232,12 @@ app.get('/api/claude-usage', requireApiKeyOrBasicAuth, async (req, res) => {
   else res.status(503).json({ error: 'Could not fetch Claude usage' });
 });
 
+app.get('/api/claude-usage/snapshots', requireApiKeyOrBasicAuth, (req, res) => {
+  const hours = parseInt(req.query.hours) || 24;
+  const since = new Date(Date.now() - hours * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  res.json(getClaudeSnapshots({ since, limit: 10000 }));
+});
+
 app.get('/api/codex-usage', requireApiKeyOrBasicAuth, async (req, res) => {
   if (req.query.force === 'true') {
     codexUsageCache = null;
@@ -322,7 +328,43 @@ app.post('/api/log', requireApiKey, (req, res) => {
   } catch(e) { res.status(400).json({ error: e.message }); }
 });
 
+const USAGE_POLL_MS = parseInt(process.env.USAGE_POLL_MS) || 60000;
+
+async function pollClaudeUsage() {
+  try {
+    const creds = JSON.parse(fs.readFileSync('/data/claude-credentials.json', 'utf8'));
+    const token = creds.claudeAiOauth.accessToken;
+    const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
+      headers: {
+        'Authorization': 'Bearer ' + token,
+        'anthropic-beta': 'oauth-2025-04-20',
+      }
+    });
+    if (!res.ok) {
+      console.error(`[usage-poll] Claude ${res.status}`);
+      return;
+    }
+    const data = await res.json();
+    insertClaudeSnapshot({
+      five_hour_util: data.five_hour?.utilization ?? null,
+      five_hour_resets_at: data.five_hour?.resets_at ?? null,
+      seven_day_util: data.seven_day?.utilization ?? null,
+      seven_day_resets_at: data.seven_day?.resets_at ?? null,
+      seven_day_opus_util: data.seven_day_opus?.utilization ?? null,
+      seven_day_sonnet_util: data.seven_day_sonnet?.utilization ?? null,
+      subscription_type: data.subscription_type || data.subscription_tier || null,
+      raw: JSON.stringify(data),
+    });
+  } catch(e) {
+    console.error('[usage-poll] Claude error:', e.message);
+  }
+}
+
+setInterval(pollClaudeUsage, USAGE_POLL_MS);
+pollClaudeUsage();
+
 app.listen(PORT, () => {
   console.log('Cost tracker running on port ' + PORT);
   console.log('Dashboard user: ' + DASH_USER);
+  console.log(`Claude usage polling every ${USAGE_POLL_MS}ms`);
 });

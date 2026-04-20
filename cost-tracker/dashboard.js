@@ -55,6 +55,22 @@ export function renderDashboard() {
   .claude-loading { color: #71717a; font-size: 14px; }
   .claude-error { color: #ef4444; font-size: 13px; }
 
+  .usage-history {
+    background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 24px;
+    margin-bottom: 24px;
+  }
+  .usage-history h2 { font-size: 16px; font-weight: 600; margin-bottom: 4px; letter-spacing: -0.01em; }
+  .usage-history .sub-type { font-size: 13px; color: #a1a1aa; margin-bottom: 16px; }
+  .usage-history-controls { display: flex; gap: 8px; margin-bottom: 16px; }
+  .usage-history-controls button {
+    background: #27272a; color: #d4d4d8; border: 1px solid #3f3f46; border-radius: 6px;
+    padding: 4px 10px; font-size: 12px; cursor: pointer;
+  }
+  .usage-history-controls button.active { background: #3f3f46; color: #fafafa; border-color: #52525b; }
+  .usage-history svg { width: 100%; height: 180px; display: block; }
+  .usage-history-legend { display: flex; gap: 16px; font-size: 12px; color: #a1a1aa; margin-top: 8px; flex-wrap: wrap; }
+  .usage-history-legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+
   @media (max-width: 600px) {
     .claude-bars { grid-template-columns: 1fr; }
   }
@@ -173,6 +189,25 @@ export function renderDashboard() {
       <h2>Codex Subscription</h2>
       <div class="sub-type" id="codex-sub-type"></div>
       <div id="codex-content"><div class="claude-loading">Loading usage data...</div></div>
+    </div>
+  </div>
+
+  <div class="usage-history">
+    <h2>Claude Usage History</h2>
+    <div class="sub-type">Per-window utilization captured every 60s</div>
+    <div class="usage-history-controls">
+      <button data-hours="3">3h</button>
+      <button data-hours="12">12h</button>
+      <button data-hours="24" class="active">24h</button>
+      <button data-hours="72">72h</button>
+      <button data-hours="168">7d</button>
+    </div>
+    <div id="usage-history-content"><div class="claude-loading">Loading history...</div></div>
+    <div class="usage-history-legend">
+      <span><span class="dot" style="background:#60a5fa"></span>5h window</span>
+      <span><span class="dot" style="background:#a78bfa"></span>7d window</span>
+      <span><span class="dot" style="background:#f59e0b"></span>7d Opus</span>
+      <span><span class="dot" style="background:#34d399"></span>7d Sonnet</span>
     </div>
   </div>
 
@@ -484,6 +519,75 @@ async function loadCodexUsage() {
   }
 }
 
+let usageHistoryHours = 24;
+
+async function loadUsageHistory() {
+  const container = document.getElementById('usage-history-content');
+  if (!container) return;
+  try {
+    const rows = await fetch('/api/claude-usage/snapshots?hours=' + usageHistoryHours).then(r => r.json());
+    if (!Array.isArray(rows) || rows.length === 0) {
+      container.innerHTML = '<div class="claude-loading">No snapshots yet — poller writes every 60s.</div>';
+      return;
+    }
+    container.innerHTML = renderUsageHistorySvg(rows);
+  } catch (e) {
+    container.innerHTML = '<div class="claude-error">Failed to load: ' + e.message + '</div>';
+  }
+}
+
+function renderUsageHistorySvg(rows) {
+  const W = 800, H = 180, pad = { l: 32, r: 12, t: 12, b: 24 };
+  const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
+  const series = [
+    { key: 'five_hour_util', color: '#60a5fa' },
+    { key: 'seven_day_util', color: '#a78bfa' },
+    { key: 'seven_day_opus_util', color: '#f59e0b' },
+    { key: 'seven_day_sonnet_util', color: '#34d399' },
+  ];
+  const times = rows.map(r => new Date(r.timestamp.replace(' ', 'T') + 'Z').getTime());
+  const tMin = times[0], tMax = times[times.length - 1];
+  const span = Math.max(1, tMax - tMin);
+  const x = t => pad.l + ((t - tMin) / span) * plotW;
+  const y = v => pad.t + plotH - (Math.min(100, Math.max(0, v)) / 100) * plotH;
+
+  let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">';
+  // Gridlines at 25/50/75/100
+  for (const g of [0, 25, 50, 75, 100]) {
+    const gy = y(g);
+    svg += '<line x1="' + pad.l + '" x2="' + (W - pad.r) + '" y1="' + gy + '" y2="' + gy + '" stroke="#27272a" stroke-width="1" />';
+    svg += '<text x="' + (pad.l - 6) + '" y="' + (gy + 3) + '" fill="#71717a" font-size="10" text-anchor="end">' + g + '%</text>';
+  }
+  // Time axis labels (first / middle / last)
+  const fmtTime = ms => {
+    const d = new Date(ms);
+    if (usageHistoryHours >= 48) return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+  for (const frac of [0, 0.5, 1]) {
+    const t = tMin + span * frac;
+    const tx = x(t);
+    svg += '<text x="' + tx + '" y="' + (H - 6) + '" fill="#71717a" font-size="10" text-anchor="middle">' + fmtTime(t) + '</text>';
+  }
+  // Series
+  for (const s of series) {
+    let d = '';
+    let started = false;
+    rows.forEach((r, i) => {
+      const v = r[s.key];
+      if (v == null) { started = false; return; }
+      const cmd = started ? 'L' : 'M';
+      d += cmd + x(times[i]) + ',' + y(v) + ' ';
+      started = true;
+    });
+    if (d) {
+      svg += '<path d="' + d + '" fill="none" stroke="' + s.color + '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />';
+    }
+  }
+  svg += '</svg>';
+  return svg;
+}
+
 function renderData() {
   const stats = cachedStats;
   const ts = cachedTimeseries;
@@ -634,6 +738,16 @@ async function load() {
   renderData();
   loadClaudeUsage();
   loadCodexUsage();
+  loadUsageHistory();
+
+  document.querySelectorAll('.usage-history-controls button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.usage-history-controls button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      usageHistoryHours = parseInt(btn.dataset.hours);
+      loadUsageHistory();
+    });
+  });
 
   // Populate filter dropdowns
   try {
@@ -694,6 +808,7 @@ async function refresh() {
     renderData();
     loadClaudeUsage();
     loadCodexUsage();
+    loadUsageHistory();
   } catch (e) { console.warn('Refresh failed', e); }
 }
 setInterval(refresh, 30000);

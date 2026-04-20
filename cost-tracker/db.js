@@ -29,8 +29,53 @@ export function getDb() {
     // Drop old delta columns if they exist (replaced by before/after)
     try { db.exec('ALTER TABLE runs DROP COLUMN usage_delta_5h'); } catch(e) {}
     try { db.exec('ALTER TABLE runs DROP COLUMN usage_delta_7d'); } catch(e) {}
+
+    db.exec(`CREATE TABLE IF NOT EXISTS claude_usage_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT DEFAULT (datetime('now')),
+      five_hour_util REAL,
+      five_hour_resets_at TEXT,
+      seven_day_util REAL,
+      seven_day_resets_at TEXT,
+      seven_day_opus_util REAL,
+      seven_day_sonnet_util REAL,
+      subscription_type TEXT,
+      raw TEXT
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_claude_snap_timestamp ON claude_usage_snapshots(timestamp)');
   }
   return db;
+}
+
+export function insertClaudeSnapshot(data) {
+  const db = getDb();
+  return db.prepare(`INSERT INTO claude_usage_snapshots
+    (five_hour_util, five_hour_resets_at, seven_day_util, seven_day_resets_at, seven_day_opus_util, seven_day_sonnet_util, subscription_type, raw)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    data.five_hour_util ?? null,
+    data.five_hour_resets_at ?? null,
+    data.seven_day_util ?? null,
+    data.seven_day_resets_at ?? null,
+    data.seven_day_opus_util ?? null,
+    data.seven_day_sonnet_util ?? null,
+    data.subscription_type ?? null,
+    data.raw ?? null
+  );
+}
+
+export function getClaudeSnapshots({ since, until, limit = 1440 } = {}) {
+  const db = getDb();
+  let where = '1=1';
+  const params = [];
+  if (since) { where += ' AND timestamp >= ?'; params.push(since); }
+  if (until) { where += ' AND timestamp <= ?'; params.push(until); }
+  return db.prepare(`SELECT timestamp, five_hour_util, five_hour_resets_at, seven_day_util, seven_day_resets_at, seven_day_opus_util, seven_day_sonnet_util, subscription_type
+    FROM claude_usage_snapshots WHERE ${where} ORDER BY timestamp ASC LIMIT ?`).all(...params, limit);
+}
+
+export function getLatestClaudeSnapshot() {
+  const db = getDb();
+  return db.prepare(`SELECT * FROM claude_usage_snapshots ORDER BY id DESC LIMIT 1`).get();
 }
 
 export function insertRun(data) {
