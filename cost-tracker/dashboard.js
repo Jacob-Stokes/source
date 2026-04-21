@@ -403,11 +403,9 @@ function formatResetDate(isoStr) {
   return days[d.getDay()] + ', ' + months[d.getMonth()] + ' ' + d.getDate();
 }
 
-/**
- * Fit a linear rate from recent snapshots, extrapolate to reset time.
- * Returns null when there isn't enough signal (< 2 snapshots in lookback,
- * or no time to reset). `lookbackMs` bounds the time slice to read.
- */
+// Fit a linear rate from recent snapshots, extrapolate to reset time.
+// Returns null when there is not enough signal (fewer than 2 snapshots
+// inside lookbackMs, or no time left to reset).
 function computeProjection(rows, key, nowMs, resetMs, lookbackMs) {
   if (!Array.isArray(rows) || !resetMs || resetMs <= nowMs) return null;
   const lookbackStart = nowMs - lookbackMs;
