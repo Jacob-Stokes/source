@@ -69,6 +69,19 @@ export function renderDashboard() {
   .usage-history-inner svg { width: 100%; height: 160px; display: block; }
   .usage-history-legend { display: flex; gap: 12px; font-size: 11px; color: #a1a1aa; margin-top: 8px; flex-wrap: wrap; }
   .usage-history-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+  .usage-chart-wrapper { position: relative; cursor: crosshair; }
+  .usage-tooltip {
+    position: absolute; pointer-events: none; display: none;
+    background: #09090b; border: 1px solid #3f3f46; border-radius: 6px;
+    padding: 8px 10px; font-size: 11px; color: #fafafa;
+    z-index: 10; min-width: 140px; line-height: 1.5;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  }
+  .usage-tooltip-time { font-size: 10px; color: #a1a1aa; margin-bottom: 4px; border-bottom: 1px solid #27272a; padding-bottom: 4px; }
+  .usage-tooltip-row { display: flex; justify-content: space-between; gap: 12px; }
+  .usage-tooltip-row .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+  .usage-tooltip-row .val { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .claude-bar-projection { font-size: 11px; margin-top: 2px; font-variant-numeric: tabular-nums; }
 
   @media (max-width: 600px) {
     .claude-bars { grid-template-columns: 1fr; }
@@ -390,13 +403,56 @@ function formatResetDate(isoStr) {
   return days[d.getDay()] + ', ' + months[d.getMonth()] + ' ' + d.getDate();
 }
 
+/**
+ * Fit a linear rate from recent snapshots, extrapolate to reset time.
+ * Returns null when there isn't enough signal (< 2 snapshots in lookback,
+ * or no time to reset). `lookbackMs` bounds the time slice to read.
+ */
+function computeProjection(rows, key, nowMs, resetMs, lookbackMs) {
+  if (!Array.isArray(rows) || !resetMs || resetMs <= nowMs) return null;
+  const lookbackStart = nowMs - lookbackMs;
+  const slice = [];
+  for (const r of rows) {
+    const t = new Date(r.timestamp.replace(' ', 'T') + 'Z').getTime();
+    if (t >= lookbackStart && r[key] != null) slice.push({ t, v: r[key] });
+  }
+  if (slice.length < 2) return null;
+  const first = slice[0], last = slice[slice.length - 1];
+  const deltaH = (last.t - first.t) / 3600000;
+  if (deltaH <= 0) return null;
+  const ratePerHour = (last.v - first.v) / deltaH;
+  const hoursToReset = (resetMs - nowMs) / 3600000;
+  const projected = last.v + ratePerHour * hoursToReset;
+  return { ratePerHour, hoursToReset, projected, current: last.v, samples: slice.length };
+}
+
+function renderProjection(p, currentPct) {
+  if (!p) return '';
+  if (!isFinite(p.projected)) return '';
+  const proj = Math.max(0, Math.round(p.projected));
+  // Colour: green if well under, amber if approaching, red if will exceed
+  let color = '#71717a';
+  if (proj >= 100) color = '#ef4444';
+  else if (proj >= 85) color = '#f59e0b';
+  else if (p.ratePerHour > 0) color = '#22c55e';
+  // Describe trajectory
+  const rate = p.ratePerHour;
+  const rateTxt = Math.abs(rate) < 0.05
+    ? 'flat'
+    : (rate > 0 ? '+' : '') + rate.toFixed(1) + '%/h';
+  return '<div class="claude-bar-projection" style="color:' + color + '">At current rate: ' + proj + '% by reset (' + rateTxt + ')</div>';
+}
+
 async function loadClaudeUsage() {
   const container = document.getElementById('claude-content');
   const subType = document.getElementById('claude-sub-type');
   try {
-    const res = await fetch('/api/claude-usage');
-    const data = await res.json();
-    if (!res.ok) {
+    const [usageRes, snapRows] = await Promise.all([
+      fetch('/api/claude-usage').then(r => r.json().then(d => ({ ok: r.ok, data: d }))),
+      fetch('/api/claude-usage/snapshots?hours=24').then(r => r.ok ? r.json() : []).catch(() => []),
+    ]);
+    const data = usageRes.data;
+    if (!usageRes.ok) {
       container.innerHTML = '<div class="claude-error">' + (data.error || 'Could not load usage data') + '</div>';
       return;
     }
@@ -413,6 +469,7 @@ async function loadClaudeUsage() {
 
     const fiveHour = data.five_hour || null;
     const sevenDay = data.seven_day || null;
+    const nowMs = Date.now();
 
     let html = '<div class="claude-bars">';
 
@@ -420,10 +477,13 @@ async function loadClaudeUsage() {
     if (fiveHour) {
       const pct = Math.min(100, Math.round(fiveHour.utilization));
       const color = barColor(pct);
+      const resetMs = fiveHour.resets_at ? new Date(fiveHour.resets_at).getTime() : null;
+      const proj = computeProjection(snapRows, 'five_hour_util', nowMs, resetMs, 30 * 60 * 1000);
       html += '<div class="claude-bar-group">';
       html += '<div class="claude-bar-label"><span>5-Hour Window</span><span class="pct" style="color:' + color + '">' + pct + '%</span></div>';
       html += '<div class="claude-bar-track"><div class="claude-bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
       html += '<div class="claude-bar-reset">Resets at ' + formatResetTime(fiveHour.resets_at) + '</div>';
+      html += renderProjection(proj, pct);
       html += '</div>';
     } else {
       html += '<div class="claude-bar-group"><div class="claude-bar-label">5-Hour Window</div><div style="color:#71717a;font-size:13px">No data</div></div>';
@@ -433,10 +493,13 @@ async function loadClaudeUsage() {
     if (sevenDay) {
       const pct = Math.min(100, Math.round(sevenDay.utilization));
       const color = barColor(pct);
+      const resetMs = sevenDay.resets_at ? new Date(sevenDay.resets_at).getTime() : null;
+      const proj = computeProjection(snapRows, 'seven_day_util', nowMs, resetMs, 6 * 3600 * 1000);
       html += '<div class="claude-bar-group">';
       html += '<div class="claude-bar-label"><span>7-Day Window</span><span class="pct" style="color:' + color + '">' + pct + '%</span></div>';
       html += '<div class="claude-bar-track"><div class="claude-bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
       html += '<div class="claude-bar-reset">Resets on ' + formatResetDate(sevenDay.resets_at) + '</div>';
+      html += renderProjection(proj, pct);
       html += '</div>';
     } else {
       html += '<div class="claude-bar-group"><div class="claude-bar-label">7-Day Window</div><div style="color:#71717a;font-size:13px">No data</div></div>';
@@ -468,9 +531,12 @@ async function loadCodexUsage() {
   const container = document.getElementById('codex-content');
   const subType = document.getElementById('codex-sub-type');
   try {
-    const res = await fetch('/api/codex-usage');
-    const data = await res.json();
-    if (!res.ok) {
+    const [usageRes, snapRows] = await Promise.all([
+      fetch('/api/codex-usage').then(r => r.json().then(d => ({ ok: r.ok, data: d }))),
+      fetch('/api/codex-usage/snapshots?hours=24').then(r => r.ok ? r.json() : []).catch(() => []),
+    ]);
+    const data = usageRes.data;
+    if (!usageRes.ok) {
       container.innerHTML = '<div class="claude-error">' + (data.error || 'Could not load usage data') + '</div>';
       return;
     }
@@ -487,6 +553,7 @@ async function loadCodexUsage() {
     const rl = data.rate_limit || {};
     const primary = rl.primary_window || null;
     const secondary = rl.secondary_window || null;
+    const nowMs = Date.now();
 
     let html = '<div class="claude-bars">';
 
@@ -495,10 +562,13 @@ async function loadCodexUsage() {
       const color = barColor(pct);
       const windowHrs = Math.round(primary.limit_window_seconds / 3600);
       const resetMins = Math.round(primary.reset_after_seconds / 60);
+      const resetMs = nowMs + primary.reset_after_seconds * 1000;
+      const proj = computeProjection(snapRows, 'primary_util', nowMs, resetMs, 30 * 60 * 1000);
       html += '<div class="claude-bar-group">';
       html += '<div class="claude-bar-label"><span>' + windowHrs + '-Hour Window</span><span class="pct" style="color:' + color + '">' + pct + '%</span></div>';
       html += '<div class="claude-bar-track"><div class="claude-bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
       html += '<div class="claude-bar-reset">Resets in ' + resetMins + ' min</div>';
+      html += renderProjection(proj, pct);
       html += '</div>';
     } else {
       html += '<div class="claude-bar-group"><div class="claude-bar-label">Primary Window</div><div style="color:#71717a;font-size:13px">No data</div></div>';
@@ -509,10 +579,13 @@ async function loadCodexUsage() {
       const color = barColor(pct);
       const windowDays = Math.round(secondary.limit_window_seconds / 86400);
       const resetHrs = Math.round(secondary.reset_after_seconds / 3600);
+      const resetMs = nowMs + secondary.reset_after_seconds * 1000;
+      const proj = computeProjection(snapRows, 'secondary_util', nowMs, resetMs, 6 * 3600 * 1000);
       html += '<div class="claude-bar-group">';
       html += '<div class="claude-bar-label"><span>' + windowDays + '-Day Window</span><span class="pct" style="color:' + color + '">' + pct + '%</span></div>';
       html += '<div class="claude-bar-track"><div class="claude-bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
       html += '<div class="claude-bar-reset">Resets in ' + resetHrs + 'h</div>';
+      html += renderProjection(proj, pct);
       html += '</div>';
     } else {
       html += '<div class="claude-bar-group"><div class="claude-bar-label">Secondary Window</div><div style="color:#71717a;font-size:13px">No data</div></div>';
@@ -541,6 +614,18 @@ async function loadCodexUsage() {
 let claudeHistoryHours = 1;
 let codexHistoryHours = 1;
 
+const CLAUDE_SERIES = [
+  { key: 'five_hour_util', color: '#60a5fa', label: '5h' },
+  { key: 'seven_day_util', color: '#a78bfa', label: '7d' },
+  { key: 'seven_day_opus_util', color: '#f59e0b', label: 'Opus' },
+  { key: 'seven_day_sonnet_util', color: '#34d399', label: 'Sonnet' },
+];
+const CODEX_SERIES = [
+  { key: 'primary_util', color: '#60a5fa', label: 'Primary' },
+  { key: 'secondary_util', color: '#a78bfa', label: 'Secondary' },
+  { key: 'code_review_util', color: '#f59e0b', label: 'Code Review' },
+];
+
 async function loadClaudeHistory() {
   const container = document.getElementById('usage-history-content');
   if (!container) return;
@@ -550,12 +635,7 @@ async function loadClaudeHistory() {
       container.innerHTML = '<div class="claude-loading">No snapshots yet — poller writes every 5 min.</div>';
       return;
     }
-    container.innerHTML = renderUsageHistorySvg(rows, [
-      { key: 'five_hour_util', color: '#60a5fa' },
-      { key: 'seven_day_util', color: '#a78bfa' },
-      { key: 'seven_day_opus_util', color: '#f59e0b' },
-      { key: 'seven_day_sonnet_util', color: '#34d399' },
-    ], claudeHistoryHours);
+    renderInteractiveHistory(container, rows, CLAUDE_SERIES, claudeHistoryHours);
   } catch (e) {
     container.innerHTML = '<div class="claude-error">Failed to load: ' + e.message + '</div>';
   }
@@ -570,23 +650,88 @@ async function loadCodexHistory() {
       container.innerHTML = '<div class="claude-loading">No snapshots yet — poller writes every 5 min.</div>';
       return;
     }
-    container.innerHTML = renderUsageHistorySvg(rows, [
-      { key: 'primary_util', color: '#60a5fa' },
-      { key: 'secondary_util', color: '#a78bfa' },
-      { key: 'code_review_util', color: '#f59e0b' },
-    ], codexHistoryHours);
+    renderInteractiveHistory(container, rows, CODEX_SERIES, codexHistoryHours);
   } catch (e) {
     container.innerHTML = '<div class="claude-error">Failed to load: ' + e.message + '</div>';
   }
 }
 
-function renderUsageHistorySvg(rows, series, hours) {
+function renderInteractiveHistory(container, rows, series, hours) {
   const W = 800, H = 180, pad = { l: 32, r: 12, t: 12, b: 24 };
   const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
   const times = rows.map(r => new Date(r.timestamp.replace(' ', 'T') + 'Z').getTime());
   const tMax = Date.now();
   const tMin = tMax - hours * 3600 * 1000;
   const span = Math.max(1, tMax - tMin);
+
+  container.innerHTML =
+    '<div class="usage-chart-wrapper">' +
+    renderUsageHistorySvg(rows, series, hours, { W, H, pad, plotW, plotH, tMin, tMax, span, times }) +
+    '<div class="usage-tooltip"></div>' +
+    '</div>';
+
+  const wrapper = container.querySelector('.usage-chart-wrapper');
+  const svgEl = wrapper.querySelector('svg');
+  const hoverLine = svgEl.querySelector('.hover-line');
+  const tooltip = wrapper.querySelector('.usage-tooltip');
+
+  wrapper.addEventListener('mousemove', (e) => {
+    const rect = svgEl.getBoundingClientRect();
+    const relX = e.clientX - rect.left;
+    if (relX < 0 || relX > rect.width) return;
+    const fracX = relX / rect.width;
+    const svgX = fracX * W;
+    if (svgX < pad.l || svgX > W - pad.r) {
+      hoverLine.style.display = 'none';
+      tooltip.style.display = 'none';
+      return;
+    }
+    const t = tMin + ((svgX - pad.l) / plotW) * span;
+    // Find nearest snapshot by time
+    let nearestIdx = -1;
+    let nearestDiff = Infinity;
+    for (let i = 0; i < times.length; i++) {
+      const d = Math.abs(times[i] - t);
+      if (d < nearestDiff) { nearestDiff = d; nearestIdx = i; }
+    }
+    if (nearestIdx < 0) return;
+    const row = rows[nearestIdx];
+    hoverLine.setAttribute('x1', String(svgX));
+    hoverLine.setAttribute('x2', String(svgX));
+    hoverLine.style.display = '';
+    // Tooltip content
+    const tFmt = new Date(times[nearestIdx]).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    let html = '<div class="usage-tooltip-time">' + tFmt + '</div>';
+    for (const s of series) {
+      const v = row[s.key];
+      const str = v == null ? '—' : Math.round(v) + '%';
+      html += '<div class="usage-tooltip-row"><span><span class="dot" style="background:' + s.color + '"></span>' + s.label + '</span><span class="val">' + str + '</span></div>';
+    }
+    tooltip.innerHTML = html;
+    tooltip.style.display = 'block';
+    // Position tooltip: right of cursor if space, otherwise left
+    const tooltipW = tooltip.offsetWidth;
+    const leftPx = relX + 14 + tooltipW > rect.width ? relX - tooltipW - 14 : relX + 14;
+    tooltip.style.left = Math.max(0, leftPx) + 'px';
+    tooltip.style.top = '4px';
+  });
+
+  wrapper.addEventListener('mouseleave', () => {
+    hoverLine.style.display = 'none';
+    tooltip.style.display = 'none';
+  });
+}
+
+function renderUsageHistorySvg(rows, series, hours, layout) {
+  const { W, H, pad, plotW, plotH, tMin, tMax, span, times } = layout || (function() {
+    const W = 800, H = 180, pad = { l: 32, r: 12, t: 12, b: 24 };
+    const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
+    const times = rows.map(r => new Date(r.timestamp.replace(' ', 'T') + 'Z').getTime());
+    const tMax = Date.now();
+    const tMin = tMax - hours * 3600 * 1000;
+    const span = Math.max(1, tMax - tMin);
+    return { W, H, pad, plotW, plotH, tMin, tMax, span, times };
+  })();
   const x = t => pad.l + ((t - tMin) / span) * plotW;
   const y = v => pad.t + plotH - (Math.min(100, Math.max(0, v)) / 100) * plotH;
 
@@ -674,6 +819,8 @@ function renderUsageHistorySvg(rows, series, hours) {
       }
     }
   }
+  // Hover line — hidden until mousemove sets x1/x2 and display
+  svg += '<line class="hover-line" x1="0" x2="0" y1="' + pad.t + '" y2="' + (pad.t + plotH) + '" stroke="#d4d4d8" stroke-width="1" stroke-dasharray="3,3" style="display:none" />';
   svg += '</svg>';
   return svg;
 }
