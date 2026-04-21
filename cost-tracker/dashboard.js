@@ -559,13 +559,13 @@ async function loadCodexUsage() {
       const pct = Math.min(100, Math.round(primary.used_percent));
       const color = barColor(pct);
       const windowHrs = Math.round(primary.limit_window_seconds / 3600);
-      const resetMins = Math.round(primary.reset_after_seconds / 60);
       const resetMs = nowMs + primary.reset_after_seconds * 1000;
+      const resetISO = new Date(resetMs).toISOString();
       const proj = computeProjection(snapRows, 'primary_util', nowMs, resetMs, 30 * 60 * 1000);
       html += '<div class="claude-bar-group">';
       html += '<div class="claude-bar-label"><span>' + windowHrs + '-Hour Window</span><span class="pct" style="color:' + color + '">' + pct + '%</span></div>';
       html += '<div class="claude-bar-track"><div class="claude-bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
-      html += '<div class="claude-bar-reset">Resets in ' + resetMins + ' min</div>';
+      html += '<div class="claude-bar-reset">Resets at ' + formatResetTime(resetISO) + '</div>';
       html += renderProjection(proj, pct);
       html += '</div>';
     } else {
@@ -576,13 +576,13 @@ async function loadCodexUsage() {
       const pct = Math.min(100, Math.round(secondary.used_percent));
       const color = barColor(pct);
       const windowDays = Math.round(secondary.limit_window_seconds / 86400);
-      const resetHrs = Math.round(secondary.reset_after_seconds / 3600);
       const resetMs = nowMs + secondary.reset_after_seconds * 1000;
+      const resetISO = new Date(resetMs).toISOString();
       const proj = computeProjection(snapRows, 'secondary_util', nowMs, resetMs, 6 * 3600 * 1000);
       html += '<div class="claude-bar-group">';
       html += '<div class="claude-bar-label"><span>' + windowDays + '-Day Window</span><span class="pct" style="color:' + color + '">' + pct + '%</span></div>';
       html += '<div class="claude-bar-track"><div class="claude-bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
-      html += '<div class="claude-bar-reset">Resets in ' + resetHrs + 'h</div>';
+      html += '<div class="claude-bar-reset">Resets on ' + formatResetDate(resetISO) + '</div>';
       html += renderProjection(proj, pct);
       html += '</div>';
     } else {
