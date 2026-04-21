@@ -66,7 +66,7 @@ export function renderDashboard() {
     padding: 3px 8px; font-size: 11px; cursor: pointer;
   }
   .usage-history-controls button.active { background: #3f3f46; color: #fafafa; border-color: #52525b; }
-  .usage-history-inner svg { width: 100%; height: 180px; display: block; }
+  .usage-history-inner svg { width: 100%; height: 160px; display: block; }
   .usage-history-legend { display: flex; gap: 12px; font-size: 11px; color: #a1a1aa; margin-top: 8px; flex-wrap: wrap; }
   .usage-history-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
   .usage-chart-wrapper { position: relative; cursor: crosshair; }
@@ -655,12 +655,7 @@ async function loadCodexHistory() {
 }
 
 function renderInteractiveHistory(container, rows, series, hours) {
-  // Measure container width so the viewBox matches exactly — otherwise
-  // preserveAspectRatio stretches text and strokes non-uniformly.
-  const measured = Math.round(container.clientWidth || 0);
-  const W = measured >= 300 ? measured : 800;
-  const H = 180;
-  const pad = { l: 32, r: 12, t: 12, b: 24 };
+  const W = 800, H = 180, pad = { l: 32, r: 12, t: 12, b: 24 };
   const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
   const times = rows.map(r => new Date(r.timestamp.replace(' ', 'T') + 'Z').getTime());
   const tMax = Date.now();
@@ -738,11 +733,11 @@ function renderUsageHistorySvg(rows, series, hours, layout) {
   const x = t => pad.l + ((t - tMin) / span) * plotW;
   const y = v => pad.t + plotH - (Math.min(100, Math.max(0, v)) / 100) * plotH;
 
-  let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" height="' + H + '" xmlns="http://www.w3.org/2000/svg" style="display:block">';
-  // Gridlines at 25/50/75/100 — non-scaling stroke keeps them at 1 device px
+  let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">';
+  // Gridlines at 25/50/75/100
   for (const g of [0, 25, 50, 75, 100]) {
     const gy = y(g);
-    svg += '<line x1="' + pad.l + '" x2="' + (W - pad.r) + '" y1="' + gy + '" y2="' + gy + '" stroke="#27272a" stroke-width="1" vector-effect="non-scaling-stroke" opacity="0.6" />';
+    svg += '<line x1="' + pad.l + '" x2="' + (W - pad.r) + '" y1="' + gy + '" y2="' + gy + '" stroke="#27272a" stroke-width="1" />';
     svg += '<text x="' + (pad.l - 6) + '" y="' + (gy + 3) + '" fill="#71717a" font-size="10" text-anchor="end">' + g + '%</text>';
   }
   // Time axis labels (first / middle / last) — spans the full selected window
@@ -818,12 +813,12 @@ function renderUsageHistorySvg(rows, series, hours, layout) {
     for (const seg of segments) {
       const d = smoothPath(seg);
       if (d) {
-        svg += '<path d="' + d + '" fill="none" stroke="' + s.color + '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />';
+        svg += '<path d="' + d + '" fill="none" stroke="' + s.color + '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />';
       }
     }
   }
   // Hover line — hidden until mousemove sets x1/x2 and display
-  svg += '<line class="hover-line" x1="0" x2="0" y1="' + pad.t + '" y2="' + (pad.t + plotH) + '" stroke="#d4d4d8" stroke-width="1" stroke-dasharray="3,3" vector-effect="non-scaling-stroke" style="display:none" />';
+  svg += '<line class="hover-line" x1="0" x2="0" y1="' + pad.t + '" y2="' + (pad.t + plotH) + '" stroke="#d4d4d8" stroke-width="1" stroke-dasharray="3,3" style="display:none" />';
   svg += '</svg>';
   return svg;
 }
