@@ -739,10 +739,13 @@ function renderUsageHistorySvg(rows, series, hours, layout) {
   const y = v => pad.t + plotH - (Math.min(100, Math.max(0, v)) / 100) * plotH;
 
   let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" height="' + H + '" xmlns="http://www.w3.org/2000/svg" style="display:block">';
-  // Gridlines at 25/50/75/100 — non-scaling stroke keeps them at 1 device px
+  // Gridlines — dashed hairlines. 0 and 100 omitted (they'd frame the plot
+  // like a border). Labels still rendered at every 25.
   for (const g of [0, 25, 50, 75, 100]) {
     const gy = y(g);
-    svg += '<line x1="' + pad.l + '" x2="' + (W - pad.r) + '" y1="' + gy + '" y2="' + gy + '" stroke="#27272a" stroke-width="1" vector-effect="non-scaling-stroke" opacity="0.6" />';
+    if (g !== 0 && g !== 100) {
+      svg += '<line x1="' + pad.l + '" x2="' + (W - pad.r) + '" y1="' + gy + '" y2="' + gy + '" stroke="#52525b" stroke-width="0.5" stroke-dasharray="2 4" vector-effect="non-scaling-stroke" opacity="0.35" />';
+    }
     svg += '<text x="' + (pad.l - 6) + '" y="' + (gy + 3) + '" fill="#71717a" font-size="10" text-anchor="end">' + g + '%</text>';
   }
   // Time axis labels (first / middle / last) — spans the full selected window
