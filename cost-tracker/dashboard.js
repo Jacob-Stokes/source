@@ -424,6 +424,31 @@ function activeMillisBetween(startMs, endMs, activeHours) {
 // 9am to 1am local = hours 9..23 plus 0. Excludes 1..8 (sleep window).
 const ACTIVE_HOURS_9_TO_1 = new Set([0, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
 
+// Project using pace over the whole current reset window, not a short
+// snapshot slice. Good for multi-day windows: rate = current / elapsed-in-
+// window (assumes window started at 0%, which is true on reset). Doesn't
+// need snapshot history — just the live utilization + when/how-big the
+// window is.
+function computeWindowPaceProjection(currentUtil, nowMs, resetMs, windowHours, activeHours) {
+  if (!resetMs || resetMs <= nowMs) return null;
+  if (currentUtil == null || !isFinite(currentUtil)) return null;
+  const windowStart = resetMs - windowHours * 3600000;
+  if (windowStart >= nowMs) return null;
+  const elapsedActive = activeMillisBetween(windowStart, nowMs, activeHours) / 3600000;
+  if (elapsedActive <= 0) return null;
+  const ratePerHour = currentUtil / elapsedActive;
+  const remainingActive = activeMillisBetween(nowMs, resetMs, activeHours) / 3600000;
+  const projected = currentUtil + ratePerHour * remainingActive;
+  return {
+    ratePerHour, hoursToReset: (resetMs - nowMs) / 3600000,
+    activeHoursToReset: remainingActive,
+    projected, current: currentUtil,
+    samples: null,
+    activeHoursModel: !!activeHours,
+    model: 'window-pace',
+  };
+}
+
 // Fit a linear rate from recent snapshots, extrapolate to reset time.
 // Returns null when there is not enough signal (fewer than 2 snapshots
 // inside lookbackMs, or no time left to reset).
@@ -519,7 +544,7 @@ async function loadClaudeUsage() {
       const pct = Math.min(100, Math.round(sevenDay.utilization));
       const color = barColor(pct);
       const resetMs = sevenDay.resets_at ? new Date(sevenDay.resets_at).getTime() : null;
-      const proj = computeProjection(snapRows, 'seven_day_util', nowMs, resetMs, 6 * 3600 * 1000, ACTIVE_HOURS_9_TO_1);
+      const proj = computeWindowPaceProjection(sevenDay.utilization, nowMs, resetMs, 7 * 24, ACTIVE_HOURS_9_TO_1);
       html += '<div class="claude-bar-group">';
       html += '<div class="claude-bar-label"><span>7-Day Window</span><span class="pct" style="color:' + color + '">' + pct + '%</span></div>';
       html += '<div class="claude-bar-track"><div class="claude-bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
@@ -605,7 +630,8 @@ async function loadCodexUsage() {
       const windowDays = Math.round(secondary.limit_window_seconds / 86400);
       const resetMs = nowMs + secondary.reset_after_seconds * 1000;
       const resetISO = new Date(resetMs).toISOString();
-      const proj = computeProjection(snapRows, 'secondary_util', nowMs, resetMs, 6 * 3600 * 1000, ACTIVE_HOURS_9_TO_1);
+      const windowHrs = secondary.limit_window_seconds / 3600;
+      const proj = computeWindowPaceProjection(secondary.used_percent, nowMs, resetMs, windowHrs, ACTIVE_HOURS_9_TO_1);
       html += '<div class="claude-bar-group">';
       html += '<div class="claude-bar-label"><span>' + windowDays + '-Day Window</span><span class="pct" style="color:' + color + '">' + pct + '%</span></div>';
       html += '<div class="claude-bar-track"><div class="claude-bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
