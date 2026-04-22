@@ -403,10 +403,34 @@ function formatResetDate(isoStr) {
   return days[d.getDay()] + ', ' + months[d.getMonth()] + ' ' + d.getDate();
 }
 
+// Count the milliseconds in [startMs, endMs] whose local hour-of-day is in
+// the activeHours set. Iterates hour-by-hour with sub-hour boundary trimming.
+// Returns total ms if activeHours is null/undefined (i.e. "all hours count").
+function activeMillisBetween(startMs, endMs, activeHours) {
+  if (endMs <= startMs) return 0;
+  if (!activeHours) return endMs - startMs;
+  let total = 0;
+  let t = startMs;
+  while (t < endMs) {
+    const nextHour = Math.floor(t / 3600000) * 3600000 + 3600000;
+    const sliceEnd = Math.min(nextHour, endMs);
+    const h = new Date(t).getHours();
+    if (activeHours.has(h)) total += (sliceEnd - t);
+    t = sliceEnd;
+  }
+  return total;
+}
+
+// 9am to 1am local = hours 9..23 plus 0. Excludes 1..8 (sleep window).
+const ACTIVE_HOURS_9_TO_1 = new Set([0, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
+
 // Fit a linear rate from recent snapshots, extrapolate to reset time.
 // Returns null when there is not enough signal (fewer than 2 snapshots
 // inside lookbackMs, or no time left to reset).
-function computeProjection(rows, key, nowMs, resetMs, lookbackMs) {
+// When activeHours is provided, rate is computed per ACTIVE hour and the
+// forward extrapolation only counts active hours — so overnight sleep
+// doesn't inflate the projection.
+function computeProjection(rows, key, nowMs, resetMs, lookbackMs, activeHours) {
   if (!Array.isArray(rows) || !resetMs || resetMs <= nowMs) return null;
   const lookbackStart = nowMs - lookbackMs;
   const slice = [];
@@ -416,12 +440,14 @@ function computeProjection(rows, key, nowMs, resetMs, lookbackMs) {
   }
   if (slice.length < 2) return null;
   const first = slice[0], last = slice[slice.length - 1];
-  const deltaH = (last.t - first.t) / 3600000;
-  if (deltaH <= 0) return null;
-  const ratePerHour = (last.v - first.v) / deltaH;
+  const activeMsInSlice = activeMillisBetween(first.t, last.t, activeHours);
+  const activeHoursInSlice = activeMsInSlice / 3600000;
+  if (activeHoursInSlice <= 0) return null;
+  const ratePerHour = (last.v - first.v) / activeHoursInSlice;
+  const activeHoursToReset = activeMillisBetween(nowMs, resetMs, activeHours) / 3600000;
   const hoursToReset = (resetMs - nowMs) / 3600000;
-  const projected = last.v + ratePerHour * hoursToReset;
-  return { ratePerHour, hoursToReset, projected, current: last.v, samples: slice.length };
+  const projected = last.v + ratePerHour * activeHoursToReset;
+  return { ratePerHour, hoursToReset, activeHoursToReset, projected, current: last.v, samples: slice.length, activeHoursModel: !!activeHours };
 }
 
 function renderProjection(p, currentPct) {
@@ -438,7 +464,8 @@ function renderProjection(p, currentPct) {
   const rateTxt = Math.abs(rate) < 0.05
     ? 'flat'
     : (rate > 0 ? '+' : '') + rate.toFixed(1) + '%/h';
-  return '<div class="claude-bar-projection" style="color:' + color + '">At current rate: ' + proj + '% by reset (' + rateTxt + ')</div>';
+  const suffix = p.activeHoursModel ? ' — active hrs only' : '';
+  return '<div class="claude-bar-projection" style="color:' + color + '">At current rate: ' + proj + '% by reset (' + rateTxt + suffix + ')</div>';
 }
 
 async function loadClaudeUsage() {
@@ -492,7 +519,7 @@ async function loadClaudeUsage() {
       const pct = Math.min(100, Math.round(sevenDay.utilization));
       const color = barColor(pct);
       const resetMs = sevenDay.resets_at ? new Date(sevenDay.resets_at).getTime() : null;
-      const proj = computeProjection(snapRows, 'seven_day_util', nowMs, resetMs, 6 * 3600 * 1000);
+      const proj = computeProjection(snapRows, 'seven_day_util', nowMs, resetMs, 6 * 3600 * 1000, ACTIVE_HOURS_9_TO_1);
       html += '<div class="claude-bar-group">';
       html += '<div class="claude-bar-label"><span>7-Day Window</span><span class="pct" style="color:' + color + '">' + pct + '%</span></div>';
       html += '<div class="claude-bar-track"><div class="claude-bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
@@ -578,7 +605,7 @@ async function loadCodexUsage() {
       const windowDays = Math.round(secondary.limit_window_seconds / 86400);
       const resetMs = nowMs + secondary.reset_after_seconds * 1000;
       const resetISO = new Date(resetMs).toISOString();
-      const proj = computeProjection(snapRows, 'secondary_util', nowMs, resetMs, 6 * 3600 * 1000);
+      const proj = computeProjection(snapRows, 'secondary_util', nowMs, resetMs, 6 * 3600 * 1000, ACTIVE_HOURS_9_TO_1);
       html += '<div class="claude-bar-group">';
       html += '<div class="claude-bar-label"><span>' + windowDays + '-Day Window</span><span class="pct" style="color:' + color + '">' + pct + '%</span></div>';
       html += '<div class="claude-bar-track"><div class="claude-bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
